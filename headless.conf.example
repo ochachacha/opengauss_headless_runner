@@ -1,0 +1,17 @@
+# headless.conf — Project-specific configuration for the headless runner.
+# Place this file in the project root (parent of the headless/ submodule).
+# Sourced by run_headless.sh and run_tmux.sh.
+
+# tmux session name (also used to derive log file names)
+SESSION_NAME="myproject-autoprove"
+
+# Default model/provider (loads ~/<name>.env for API keys).
+# Override at runtime: ./headless/run_tmux.sh --model claude start
+DEFAULT_MODEL="claude"
+
+# Arguments appended to /autoformalize.  This is the main project-specific
+# setting — it controls what the agent works on.
+AUTOFORMALIZE_ARGS="--source=reference/paper.pdf --max-cycles=200 --max-total-runtime=72h --max-stuck-cycles=10 --deep=stuck \"Section to formalize\""
+
+# Optional: override PTY output log path (default: ~/${SESSION_NAME}_output.log)
+# PTY_OUTPUT_LOG="$HOME/my_output.log"
