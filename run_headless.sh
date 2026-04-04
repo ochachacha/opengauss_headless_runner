@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OPENGAUSS_DIR="$HOME/OpenGauss"
+: "${OPENGAUSS_DIR:=$HOME/OpenGauss}"
 
 # Source project-specific config (SESSION_NAME, AUTOFORMALIZE_ARGS, etc.)
 CONF="$PROJECT_ROOT/headless.conf"

@@ -15,3 +15,6 @@ AUTOFORMALIZE_ARGS="--source=reference/paper.pdf --max-cycles=200 --max-total-ru
 
 # Optional: override PTY output log path (default: ~/${SESSION_NAME}_output.log)
 # PTY_OUTPUT_LOG="$HOME/my_output.log"
+
+# Optional: override OpenGauss installation directory (default: ~/OpenGauss)
+# OPENGAUSS_DIR="$HOME/OpenGauss"

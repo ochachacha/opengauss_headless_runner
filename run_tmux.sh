@@ -46,11 +46,11 @@ else
 fi
 
 : "${SESSION_NAME:=headless-autoprove}"
-GAUSS_LOG="$HOME/${SESSION_NAME}_output.log"
+: "${PTY_OUTPUT_LOG:=$HOME/${SESSION_NAME}_output.log}"
+GAUSS_LOG="$PTY_OUTPUT_LOG"
 RUNNER_LOG="$HOME/${SESSION_NAME}_runner.log"
 HEADLESS_SCRIPT="$SCRIPT_DIR/run_headless.sh"
 RENDER_SCRIPT="$SCRIPT_DIR/render_pty.py"
-VENV_PYTHON="$HOME/OpenGauss/venv/bin/python"
 
 usage() {
     cat <<EOF
@@ -97,9 +97,10 @@ cmd_start() {
         "$tmux_cmd"
 
     echo "Started tmux session '$SESSION_NAME'"
-    echo "  attach:  $0 attach"
-    echo "  log:     tail -f $RUNNER_LOG"
-    echo "  view:    $0 view"
+    echo "  attach:    $0 attach"
+    echo "  PTY output: $GAUSS_LOG"
+    echo "  view:      $0 view"
+    echo "  runner log: $RUNNER_LOG"
 }
 
 cmd_attach() {
