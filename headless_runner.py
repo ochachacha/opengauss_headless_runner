@@ -65,6 +65,14 @@ _STUCK_PATTERNS: list[bytes] = [
     b"limit reached",
 ]
 
+# Subset of stuck patterns that indicate context exhaustion — these need
+# /compact, not a regular nudge (which would just add to the full context).
+_CONTEXT_LIMIT_PATTERNS: list[bytes] = [
+    b"Context limit reached",
+    b"context limit reached",
+    b"limit reached",
+]
+
 # How long a stuck pattern must persist before we nudge (seconds).
 # Avoids reacting to transient messages that scroll past.
 STUCK_DETECT_DELAY: int = int(os.environ.get("STUCK_DETECT_DELAY_SECONDS", "30"))
@@ -251,6 +259,15 @@ def _check_stuck_pattern(task) -> bool:  # noqa: ANN001
     return any(pat in tail for pat in _STUCK_PATTERNS)
 
 
+def _is_context_limit(task) -> bool:  # noqa: ANN001
+    """Return True if the stuck state is specifically a context limit."""
+    buf = getattr(task, "_recent_output", None)
+    if not buf:
+        return False
+    tail = bytes(buf[-4096:]) if len(buf) > 4096 else bytes(buf)
+    return any(pat in tail for pat in _CONTEXT_LIMIT_PATTERNS)
+
+
 def _check_idle_timeout() -> None:
     """Nudge idle tasks with 'continue'; cancel if nudge didn't help.
 
@@ -276,13 +293,27 @@ def _check_idle_timeout() -> None:
                 )
             elif now - _stuck_detected_at[task.task_id] > STUCK_DETECT_DELAY:
                 if nudge_time is None:
+                    # Context limit needs /compact, not a regular nudge
+                    if _is_context_limit(task):
+                        msg = "/compact\r"
+                        label = "/compact"
+                    else:
+                        msg = NUDGE_MESSAGE
+                        label = "continue"
                     log.info(
-                        "Task %s: stuck pattern persisted for %ds — sending 'continue'",
+                        "Task %s: stuck pattern persisted for %ds — sending '%s'",
                         task.task_id,
                         int(now - _stuck_detected_at[task.task_id]),
+                        label,
                     )
-                    if _send_continue(task):
-                        _nudge_sent_at[task.task_id] = now
+                    fd = task.pty_master_fd
+                    if fd is not None:
+                        try:
+                            os.write(fd, msg.encode())
+                            _nudge_sent_at[task.task_id] = now
+                        except OSError as exc:
+                            log.warning("Failed to write to PTY for %s: %s", task.task_id, exc)
+                            mgr.cancel(task.task_id)
                     else:
                         log.warning("Task %s has no writable PTY — cancelling", task.task_id)
                         mgr.cancel(task.task_id)
