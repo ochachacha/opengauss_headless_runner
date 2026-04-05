@@ -545,6 +545,14 @@ def _spawn_session(config: dict) -> Optional[object]:
                 argv[i + 1] = override_model
                 break
 
+    # Inject a system-prompt reminder to read CLAUDE.md so the agent picks
+    # up project-specific rules (axiomatization boundaries, file discipline,
+    # etc.) before doing any work.
+    argv.extend([
+        "--append-system-prompt",
+        "Read the project's CLAUDE.md for detailed instructions before starting work.",
+    ])
+
     try:
         task = mgr.spawn_interactive(
             theorem="(headless continuous run)",
