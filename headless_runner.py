@@ -545,16 +545,10 @@ def _spawn_session(config: dict) -> Optional[object]:
                 argv[i + 1] = override_model
                 break
 
-    # Inject a system-prompt reminder to read CLAUDE.md so the agent picks
-    # up project-specific rules (axiomatization boundaries, file discipline,
-    # etc.) before doing any work.  Must be inserted before the positional
-    # prompt argument (last element) since CLI options after positional args
-    # are ignored.
-    _inject = [
-        "--append-system-prompt",
-        "Read the project's CLAUDE.md for detailed instructions before starting work.",
-    ]
-    argv[-1:] = _inject + argv[-1:]
+    # Remind the agent to read CLAUDE.md by appending to the positional
+    # prompt (last element of argv).
+    if argv:
+        argv[-1] = argv[-1] + "\n\nRead the project's CLAUDE.md for detailed instructions before starting work."
 
     try:
         task = mgr.spawn_interactive(
