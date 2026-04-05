@@ -2,6 +2,19 @@
 
 Continuous [OpenGauss](https://github.com/opengauss) autoformalize runner for headless EC2 instances.  Spawns PTY-backed Claude Code sessions, monitors for idle/stuck states, nudges unresponsive sessions, and loops until stopped.
 
+## Three-phase loop
+
+Each cycle runs three phases:
+
+1. **Autoformalize** — spawns a Gauss-managed `/autoformalize` session (PTY-backed) that runs until completion or idle timeout.
+2. **Audit-fix loop** — after autoformalize hands back:
+   - **Audit**: spawns a plain `claude --print` agent that reads all Lean source and writes `audit/latest.md` with `STATUS: PASS` or `STATUS: FAIL`.
+   - **Fix**: if the audit fails, spawns a Gauss-staged Claude session (with lean4-skills: LSP, sorry analyzer, prove cycle) directed by the audit report.
+   - Repeats audit→fix until the audit's integrity verdict passes. No round limit — integrity failures must be resolved before the autoformalizer runs again.
+3. **Next cycle** — back to autoformalize.
+
+The audit agent is a separate instance from the prover — it independently verifies constant consistency, detects vacuous proofs, checks for sorry laundering, and validates theorem faithfulness.
+
 ## Setup
 
 Add this repo as a git submodule inside your project:
@@ -32,7 +45,9 @@ exec "$(dirname "$0")/headless/run_tmux.sh" "$@"
 |---|---|
 | `run_tmux.sh` | Main entry point. Manages a tmux session that runs the headless loop. |
 | `run_headless.sh` | Thin wrapper that sets `PYTHONPATH`, `GAUSS_PROJECT_ROOT`, and `PTY_OUTPUT_LOG`, then execs `headless_runner.py` under the OpenGauss virtualenv. |
-| `headless_runner.py` | Core loop. Resolves `/autoformalize` via OpenGauss, spawns PTY-backed Claude Code sessions, monitors for idle timeouts, nudges stuck sessions, and loops until stopped. |
+| `headless_runner.py` | Core loop. Runs the three-phase autoformalize→audit→fix cycle. |
+| `audit_prompt.md` | Durable audit checklist. Defines what the audit agent checks (constant consistency, vacuous proofs, sorry laundering, etc.) and the machine-readable report format. |
+| `fix_prompt.md` | Instructions for the fix agent. Tells it to read the audit report and fix flagged issues using lean4-skills. |
 | `render_pty.py` | Utility to render the last screen state from a raw PTY log file (uses `pyte` virtual terminal emulation). Usage: `render_pty.py <logfile> [rows] [cols]`. |
 
 ## `headless.conf`
@@ -86,7 +101,9 @@ All settings are overridable via environment variables:
 | `NUDGE_MESSAGE` | `continue with the most recommended action` | Text sent to the PTY when a session is idle. |
 | `POLL_INTERVAL_SECONDS` | `15` | Seconds between status polls while a session is running. |
 | `FAILURE_BACKOFF_SECONDS` | `300` | Seconds to wait before retrying after a failed session. |
-| `MAX_CYCLES` | `0` (infinite) | Maximum number of sessions to run before exiting. |
+| `MAX_CYCLES` | `0` (infinite) | Maximum number of full autoformalize+audit cycles before exiting. |
+| `AUDIT_PROMPT_PATH` | `headless/audit_prompt.md` | Path to the audit prompt template. |
+| `FIX_PROMPT_PATH` | `headless/fix_prompt.md` | Path to the fix prompt template. |
 | `PTY_OUTPUT_LOG` | *(set by `run_headless.sh`)* | Path to tee raw Claude PTY output to. |
 
 ### Model/provider env files (`~/<model>.env`)

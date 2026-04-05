@@ -18,18 +18,24 @@ else
 fi
 
 MODEL="${DEFAULT_MODEL:-claude}"  # override with --model <name>
+HEADLESS_MODE="full"              # override with --audit or --fix
 
-# Parse --model flag before subcommand
+# Parse flags before subcommand
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --model)
             MODEL="$2"; shift 2 ;;
         --model=*)
             MODEL="${1#--model=}"; shift ;;
+        --audit)
+            HEADLESS_MODE="audit"; shift ;;
+        --fix)
+            HEADLESS_MODE="fix"; shift ;;
         *)
             break ;;
     esac
 done
+export HEADLESS_MODE
 
 # Source env file for the chosen model (e.g. ~/claude.env, ~/qwen.env)
 ENV_FILE="$HOME/${MODEL}.env"
@@ -54,14 +60,18 @@ RENDER_SCRIPT="$SCRIPT_DIR/render_pty.py"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--model <name>] <command>
+Usage: $(basename "$0") [--model <name>] [--audit | --fix] <command>
 
 Options:
   --model <name>  Model to use (default: $DEFAULT_MODEL). Loads ~/\<name\>.env
                   for environment variables. Examples: claude, qwen
+  --audit         Run audit-only: spawns the audit agent, writes audit/latest.md,
+                  and exits. Does not run autoformalize or fix.
+  --fix           Run fix-only: assumes audit/latest.md exists, spawns the
+                  Gauss-staged fix agent, and exits. Does not run autoformalize.
 
 Commands:
-  start    Create a tmux session and run the headless autoprove loop
+  start    Create a tmux session and run the headless loop
   attach   Attach to the running session (Ctrl-b d to detach)
   stop     Kill the tmux session
   status   Check if the session is running
@@ -87,9 +97,10 @@ cmd_start() {
 
     # Source the env file inside the tmux session so the spawned shell
     # inherits the correct API keys (tmux starts a fresh shell).
-    local tmux_cmd=""
+    # Also forward HEADLESS_MODE since tmux doesn't inherit exports.
+    local tmux_cmd="export HEADLESS_MODE='$HEADLESS_MODE'; "
     if [[ -f "$ENV_FILE" ]]; then
-        tmux_cmd="set -a; source '$ENV_FILE'; set +a; "
+        tmux_cmd+="set -a; source '$ENV_FILE'; set +a; "
     fi
     tmux_cmd+="$HEADLESS_SCRIPT 2>&1 | tee -a $RUNNER_LOG"
 

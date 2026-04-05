@@ -18,3 +18,11 @@ AUTOFORMALIZE_ARGS="--source=reference/paper.pdf --max-cycles=200 --max-total-ru
 
 # Optional: override OpenGauss installation directory (default: ~/OpenGauss)
 # OPENGAUSS_DIR="$HOME/OpenGauss"
+
+# ── Audit-fix loop settings ──────────────────────────────────────────────────
+
+# The audit-fix loop runs until integrity passes (no round limit).
+# Override paths to prompt templates (defaults: headless/audit_prompt.md,
+# headless/fix_prompt.md).
+# AUDIT_PROMPT_PATH="$PROJECT_ROOT/headless/audit_prompt.md"
+# FIX_PROMPT_PATH="$PROJECT_ROOT/headless/fix_prompt.md"
