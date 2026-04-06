@@ -18,7 +18,10 @@ Read the audit report at the path provided at the end of this prompt. It contain
 3. **Preserve existing correct proofs.** Do not break theorems that the audit marked as genuine.
 4. **Build after each change.** Run `lake env lean <path/to/File.lean>` after editing a file. Fix build errors before moving on.
 5. **Do not introduce new problems.** Never replace `sorry` with `True` or trivial. Never add Prop fields to structures unless the project allows it. Never axiomatize results the project says should be proved.
-6. **Commit when done.** After all fixes compile, create a git commit summarizing what was fixed and why.
+6. **Commit when done.** After all fixes compile, commit using the audit agent identity:
+   ```
+   git -c user.name="Audit Agent" -c user.email="audit@noreply" commit -m "Audit fix: <summary>"
+   ```
 
 ## Workflow
 

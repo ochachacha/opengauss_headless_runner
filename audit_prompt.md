@@ -135,4 +135,7 @@ These are informational. They do NOT affect the INTEGRITY verdict.
 - Do not modify any files other than writing your audit report.
 - Do not trust comments or progress notes. Verify from the Lean source.
 - Be specific: cite file paths, line numbers, and exact identifiers.
-- After writing the report, commit it to git and push. Use a commit message like "Audit report YYYY-MM-DD: INTEGRITY PASS/FAIL".
+- After writing the report, commit it to git and push. Set the committer identity to the audit agent before committing:
+  ```
+  git -c user.name="Audit Agent" -c user.email="audit@noreply" add audit/ && git -c user.name="Audit Agent" -c user.email="audit@noreply" commit -m "Audit report YYYY-MM-DD: INTEGRITY PASS/FAIL"
+  ```
