@@ -6,7 +6,7 @@ Read the project's CLAUDE.md and any formalization guide for project-specific sc
 
 ## Output
 
-Write your report to `audit/YYYY-MM-DD-HHMMSS-audit.md` using the current UTC datetime (e.g., `audit/2026-04-05-143022-audit.md`). The file MUST begin with exactly these two lines:
+Write your report to `audit/YYYY-MM-DD-HHMMSS-audit.md` using the current UTC datetime. The file MUST begin with exactly:
 
 ```
 INTEGRITY: PASS
@@ -16,66 +16,59 @@ or
 INTEGRITY: FAIL
 ```
 
-followed by a completeness summary line:
+followed by:
 
 ```
 COMPLETENESS: <number> sorries, <number> axioms, <number> proved
 ```
 
-These two lines control the outer loop:
-- **INTEGRITY** gates the fix agent. FAIL means there are bugs (vacuous proofs, contradictory constants, sorry laundering, axiomatized in-scope results) that the fixer must repair. PASS means the codebase is honest — sorries are real gaps, proofs are genuine.
-- **COMPLETENESS** is informational. It tells the autoformalizer what work remains. It never blocks the loop.
+- **INTEGRITY** gates the fix agent. FAIL = bugs the fixer must repair. PASS = codebase is honest.
+- **COMPLETENESS** is informational.
 
-**Important distinction:** Honest `sorry`'s (incomplete work) are NOT integrity failures. Only dishonest or broken code is an integrity failure. After the fixer converts a vacuous proof to `sorry`, that sorry is now honest — integrity passes.
+Honest `sorry`'s (incomplete work) are NOT integrity failures.
 
-The outer loop finds your report by looking for the most recently modified `.md` file in `audit/`. Use the datetime-stamped filename so reports accumulate and are never overwritten.
+The outer loop finds your report by looking for the most recently modified `.md` file in `audit/`.
 
 ## Audit Checklist
 
 ### 1. Build Status
 
-Run `lake build` and report whether it succeeds. Fail if the build fails.
+Run `lake build` and report whether it succeeds.
 
 ### 2. Sorry and Axiom Inventory
 
-List every `sorry` and every `axiom` in the codebase with file, line, and name. For each axiom, note whether the project's scope documentation marks it as external (acceptable) or in-scope (should be a theorem, not an axiom).
+List every `sorry` and `axiom` with file, line, name. For each axiom, note whether the project's scope documentation marks it as external (acceptable) or in-scope (integrity failure).
 
-### 3. Blackbox Statement Accuracy
+### 3. Three-Way Statement Consistency (highest priority)
 
-**This is the highest-priority check.** Every `axiom` and every `theorem ... := by sorry` is a blackbox — downstream code trusts its statement without proof. An incorrectly stated blackbox silently corrupts everything that depends on it. A single wrong type signature, flipped inequality, or missing hypothesis can make an entire proof tree vacuously true or semantically wrong while still compiling.
+For every definition, theorem, axiom, and lemma that cites a paper reference, verify that **all three agree**:
 
-For every blackbox:
-- Verify its statement faithfully matches the cited source (paper, reference, etc.)
-- Check that its type signature is correct: argument types, hypothesis directions, conclusion strength
-- Check that constants in the statement evaluate to values consistent with how the blackbox is used (e.g., if a theorem says `x > A` and another says `x < B`, verify `A < B`)
-- If the blackbox is used in a proof chain, trace whether the chain's hypotheses can all be simultaneously satisfied given the concrete definitions
+**(a) The paper's statement** — look up the cited result in `reference/cghhl2_arxiv_v3.tex` by LaTeX label or section number.
+**(b) The English comment/docstring** — the informal description in the Lean file.
+**(c) The actual Lean type signature** — the formal statement in code.
 
-**This is an integrity failure.** A wrongly stated blackbox is worse than a missing proof — it actively breaks correctness.
+Check for:
+- **Numbering errors**: comment cites wrong theorem/example number vs the LaTeX label
+- **Semantic drift**: comment describes one thing, code formalizes something different (wrong inequality direction, swapped quantifiers, missing hypothesis)
+- **Attribution errors**: comment cites Prop X but content comes from Lem Y
+- **Weakening/strengthening**: code is strictly weaker or stronger than the paper without acknowledgment
+- **Constant consistency**: if a statement says `x > A` and another says `x < B`, verify `A < B` given concrete definitions
 
-### 4. Proof Integrity
+This applies to ALL statements — proved, sorry'd, and axiom alike.
 
-Check for vacuous proofs — theorems whose hypotheses can never be simultaneously satisfied. This happens when:
-- Constants have contradictory relationships (e.g., a theorem requires `x > A` and `x < B` but `A >= B`)
-- A `sorry`'d lemma feeds impossible conclusions into downstream proofs
-- Hypotheses reference definitions that evaluate to contradictions
+**Code not matching paper = integrity FAIL. Comment-only errors = WARN.**
 
-Trace the dependency chain of key results. If any link has unsatisfiable hypotheses, everything downstream is vacuously true.
+### 4. Proof Integrity and Sorry Laundering
 
-### 4. Sorry Laundering
+- No vacuous proofs (unsatisfiable hypotheses, contradictory constants)
+- No `Prop`-valued fields in structures
+- No `sorry` replaced with `True`/trivial
+- No axioms that bundle the conclusion of what should be proved
+- Trace dependency chains of key results for satisfiability
 
-Check that proof obligations are not hidden in illegitimate places:
-- No `Prop`-valued fields added to structures (unless the project explicitly allows it)
-- No `sorry` replaced with `True`, `trivial`, or tautological statements
-- No axioms whose conclusions overlap with results the project says should be proved
-- No mega-axioms that bundle multiple unrelated claims
+### 5. Progress Assessment
 
-### 5. Theorem Faithfulness
-
-Compare formalized theorem statements against the source material (paper, textbook, etc.) referenced in comments and documentation. Flag any theorem that claims to formalize a specific result but whose statement is strictly weaker without acknowledgment.
-
-### 6. Progress Assessment
-
-Provide an honest assessment of what is genuinely proved vs what is incomplete. Count sorry's, axioms, and fully-proved theorems. Compare against the project's claimed progress if any progress notes exist.
+Count sorry's, axioms, proved theorems. Compare against claimed progress.
 
 ## Report Format
 
@@ -86,56 +79,38 @@ COMPLETENESS: {N} sorries, {M} axioms, {P} proved
 # Audit Report — {date}
 
 ## Summary
-{One paragraph: what passed, what failed, overall assessment}
+{One paragraph}
 
 ## Integrity Findings
 
-These determine INTEGRITY verdict. Any FAIL here → INTEGRITY: FAIL.
-
 ### 1. Build Status
-**Result:** PASS / FAIL
+{PASS/FAIL}
+
+### 2. Three-Way Statement Consistency
+{For each statement: name, cited reference, whether (a) paper (b) comment (c) code agree. Flag mismatches.}
+
+### 3. Proof Integrity / Sorry Laundering
 {Details}
 
-### 2. Blackbox Statement Accuracy
-**Result:** PASS / FAIL
-{For each blackbox: name, cited source, whether statement matches, any issues}
+## Completeness
 
-### 3. Proof Integrity
-**Result:** PASS / FAIL
-{Details — cite specific constant values, hypothesis chains}
+### 4. Sorry and Axiom Inventory
+{Table}
 
-### 4. Sorry Laundering
-**Result:** PASS / FAIL
-{Details}
-
-### 5. Theorem Faithfulness
-**Result:** PASS / FAIL / WARN
-{Details}
-
-## Completeness Findings
-
-These are informational. They do NOT affect the INTEGRITY verdict.
-
-### 6. Sorry and Axiom Inventory
-**Result:** {counts}
-{Table of sorries and axioms}
-
-### 7. Progress Assessment
-**Result:** INFO
-{Honest summary}
+### 5. Progress Assessment
+{Summary}
 
 ## Action Items (integrity failures only)
-{Numbered list of specific things the fix agent must do, with file paths and line numbers.
- Only list items that are integrity failures — not sorry's that need proving.}
+{Numbered list with file paths and line numbers}
 ```
 
 ## Rules
 
-- Read ALL `.lean` files in the project. Do not skip any.
+- Read ALL `.lean` files. Do not skip any.
 - Do not modify any files other than writing your audit report.
-- Do not trust comments or progress notes. Verify from the Lean source.
-- Be specific: cite file paths, line numbers, and exact identifiers.
-- After writing the report, commit it to git and push. Set the committer identity to the audit agent before committing:
+- Do not trust comments or progress notes. Verify from Lean source.
+- Be specific: file paths, line numbers, exact identifiers.
+- After writing the report, commit and push:
   ```
   git -c user.name="Audit Agent" -c user.email="audit@noreply" add audit/ && git -c user.name="Audit Agent" -c user.email="audit@noreply" commit -m "Audit report YYYY-MM-DD: INTEGRITY PASS/FAIL"
   ```
