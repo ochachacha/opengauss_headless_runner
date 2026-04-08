@@ -716,7 +716,8 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
     """Phase 1: spawn the autoformalize session."""
     command = f"/autoformalize {AUTOFORMALIZE_ARGS}".strip()
     handoff_instruction = (
-        "\n\nRead the project's CLAUDE.md for detailed instructions before starting work."
+        "\n\nRead the project's CLAUDE.md, PROOF_STRATEGY.md, and FORMALIZATION_GUIDE.md. "
+        "Based on those documents, design the right --claim-select for your session."
         f"\n\nWhen you are done and want to hand off to the audit agent, "
         f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
     )
