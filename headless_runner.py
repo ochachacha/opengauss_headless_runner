@@ -60,6 +60,7 @@ _nudge_sent_at: dict[str, float] = {}   # task_id -> when we sent "continue"
 _stuck_detected_at: dict[str, float] = {}  # task_id -> when stuck pattern first seen
 _task_session_type: dict[str, str] = {}  # task_id -> "autoformalize" | "audit" | "fix"
 _done_latched: dict[str, float] = {}  # task_id -> when done pattern first seen (sticky)
+_done_verdict: dict[str, str] = {}   # task_id -> "pass" | "fail" | "" (from handoff phrase)
 _orig_remember = _sm_module._remember_recent_output
 
 # Patterns in PTY output that indicate the session is stuck waiting for input
@@ -84,7 +85,15 @@ _CONTEXT_LIMIT_PATTERNS: list[bytes] = [
 DONE_HANDOFF_PHRASE: str = os.environ.get(
     "DONE_HANDOFF_PHRASE", "HEADLESS_RUNNER_HANDOFF_DONE"
 )
-_DONE_PATTERNS: list[bytes] = [DONE_HANDOFF_PHRASE.encode()]
+# Audit-specific handoff phrases that encode the verdict directly,
+# so the runner doesn't have to race against file I/O to parse the report.
+DONE_HANDOFF_PASS: str = "HEADLESS_RUNNER_HANDOFF_AUDIT_PASS"
+DONE_HANDOFF_FAIL: str = "HEADLESS_RUNNER_HANDOFF_AUDIT_FAIL"
+_DONE_PATTERNS: list[bytes] = [
+    DONE_HANDOFF_PASS.encode(),
+    DONE_HANDOFF_FAIL.encode(),
+    DONE_HANDOFF_PHRASE.encode(),  # generic fallback (autoformalize, fix)
+]
 
 # How long a stuck pattern must persist before we nudge (seconds).
 # Avoids reacting to transient messages that scroll past.
@@ -311,13 +320,20 @@ def _is_context_limit(task) -> bool:  # noqa: ANN001
     return any(pat in tail for pat in _CONTEXT_LIMIT_PATTERNS)
 
 
-def _check_done_pattern(task) -> bool:  # noqa: ANN001
-    """Return True if the PTY output contains the done/handoff pattern."""
+def _check_done_pattern(task) -> Optional[bytes]:  # noqa: ANN001
+    """Return the matched done/handoff pattern, or None if not found.
+
+    Checks PASS/FAIL-specific patterns first so the verdict is captured
+    even when the generic pattern would also match.
+    """
     buf = getattr(task, "_recent_output", None)
     if not buf:
-        return False
+        return None
     tail = bytes(buf[-4096:]) if len(buf) > 4096 else bytes(buf)
-    return any(pat in tail for pat in _DONE_PATTERNS)
+    for pat in _DONE_PATTERNS:
+        if pat in tail:
+            return pat
+    return None
 
 
 def _check_idle_timeout() -> None:
@@ -345,13 +361,24 @@ def _check_idle_timeout() -> None:
         # Latch: once the done phrase appears anywhere in the buffer,
         # remember it permanently for this task (even if later output
         # scrolls it out of the 4KB tail).
-        if task.task_id not in _done_latched and _check_done_pattern(task):
-            _done_latched[task.task_id] = now
-            log.info(
-                "Task %s (%s): done pattern detected — waiting for %ds of "
-                "silence before handoff",
-                task.task_id, session_type, DONE_SILENCE,
-            )
+        if task.task_id not in _done_latched:
+            matched = _check_done_pattern(task)
+            if matched is not None:
+                _done_latched[task.task_id] = now
+                # Decode verdict from the specific pattern that matched.
+                if matched == DONE_HANDOFF_PASS.encode():
+                    _done_verdict[task.task_id] = "pass"
+                elif matched == DONE_HANDOFF_FAIL.encode():
+                    _done_verdict[task.task_id] = "fail"
+                else:
+                    _done_verdict[task.task_id] = ""
+                log.info(
+                    "Task %s (%s): done pattern detected (verdict=%s) — "
+                    "waiting for %ds of silence before handoff",
+                    task.task_id, session_type,
+                    _done_verdict[task.task_id] or "generic",
+                    DONE_SILENCE,
+                )
 
         if task.task_id in _done_latched:
             # Check silence: time since last PTY output.
@@ -734,7 +761,10 @@ def _spawn_audit_session() -> Optional[str]:
 
     audit_prompt += (
         f"\n\nWhen you are completely done writing the audit report, "
-        f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
+        f"print exactly ONE of these phrases on its own line depending on "
+        f"the integrity verdict:\n"
+        f"  - If INTEGRITY: PASS → {DONE_HANDOFF_PASS}\n"
+        f"  - If INTEGRITY: FAIL → {DONE_HANDOFF_FAIL}\n"
     )
 
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
@@ -783,6 +813,14 @@ def _spawn_audit_session() -> Optional[str]:
     if status == "failed":
         log.warning("Audit agent failed — still checking for report")
 
+    # Prefer the verdict encoded in the handoff phrase (avoids file-parse races).
+    handoff_verdict = _done_verdict.pop(task.task_id, "")
+    if handoff_verdict in ("pass", "fail"):
+        log.info("Audit verdict from handoff phrase: %s", handoff_verdict)
+        return handoff_verdict
+
+    # Fallback: parse the report file.
+    log.info("No verdict from handoff phrase — falling back to report file")
     return _parse_audit_verdict()
 
 
