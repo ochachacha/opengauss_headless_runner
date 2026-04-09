@@ -167,6 +167,9 @@ if not AUTOFORMALIZE_ARGS and HEADLESS_MODE == "full":
     )
     sys.exit(1)
 
+# Optional extra instruction appended to all agent prompts (formalize, audit, fix).
+EXTRA_INSTRUCTION: str = os.environ.get("HEADLESS_EXTRA_INSTRUCTION", "").strip()
+
 # Seconds of PTY silence before a session is considered stuck and cancelled.
 IDLE_TIMEOUT: int = int(
     float(os.environ.get("IDLE_TIMEOUT_SECONDS", "60"))
@@ -721,6 +724,8 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
         f"\n\nWhen you are done and want to hand off to the audit agent, "
         f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
     )
+    if EXTRA_INSTRUCTION:
+        handoff_instruction += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
     return _spawn_gauss_session(
         config,
         command,
@@ -767,6 +772,8 @@ def _spawn_audit_session() -> Optional[str]:
         f"  - If INTEGRITY: PASS → {DONE_HANDOFF_PASS}\n"
         f"  - If INTEGRITY: FAIL → {DONE_HANDOFF_FAIL}\n"
     )
+    if EXTRA_INSTRUCTION:
+        audit_prompt += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
 
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
     argv = [
@@ -908,6 +915,8 @@ def _spawn_fix_session(config: dict) -> Optional[object]:
         f"When you are completely done with all fixes and have committed, "
         f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
     )
+    if EXTRA_INSTRUCTION:
+        prompt += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
 
     # Use /prove as the routing command — we only need Gauss staging.
     # The prompt_override replaces the "run /lean4:prove" instruction.
@@ -969,6 +978,8 @@ def main() -> None:
         MAX_CYCLES if MAX_CYCLES else "∞",
         f"  pty_log={_pty_log_path}" if _pty_log_path else "",
     )
+    if EXTRA_INSTRUCTION:
+        log.info("Extra instruction: %s", EXTRA_INSTRUCTION)
 
     # On the first iteration, HEADLESS_MODE controls which phases to skip:
     #   "full"  → run all phases

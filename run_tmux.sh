@@ -19,6 +19,7 @@ fi
 
 MODEL="${DEFAULT_MODEL:-claude}"  # override with --model <name>
 HEADLESS_MODE="full"              # override with --audit or --fix
+EXTRA_INSTRUCTION=""              # override with --instruction "..."
 
 # Parse flags before subcommand
 while [[ $# -gt 0 ]]; do
@@ -31,11 +32,16 @@ while [[ $# -gt 0 ]]; do
             HEADLESS_MODE="audit"; shift ;;
         --fix)
             HEADLESS_MODE="fix"; shift ;;
+        --instruction)
+            EXTRA_INSTRUCTION="$2"; shift 2 ;;
+        --instruction=*)
+            EXTRA_INSTRUCTION="${1#--instruction=}"; shift ;;
         *)
             break ;;
     esac
 done
 export HEADLESS_MODE
+export HEADLESS_EXTRA_INSTRUCTION="$EXTRA_INSTRUCTION"
 
 # Source env file for the chosen model (e.g. ~/claude.env, ~/qwen.env)
 ENV_FILE="$HOME/${MODEL}.env"
@@ -69,6 +75,10 @@ Options:
                   and exits. Does not run autoformalize or fix.
   --fix           Run fix-only: assumes audit/latest.md exists, spawns the
                   Gauss-staged fix agent, and exits. Does not run autoformalize.
+  --instruction "text"
+                  Extra instruction appended to the agent prompt. Applies to
+                  whichever agent runs (formalize, audit, or fix).
+                  Example: --instruction "Focus on proving theorem X"
 
 Commands:
   start    Create a tmux session and run the headless loop
@@ -98,7 +108,7 @@ cmd_start() {
     # Source the env file inside the tmux session so the spawned shell
     # inherits the correct API keys (tmux starts a fresh shell).
     # Also forward HEADLESS_MODE since tmux doesn't inherit exports.
-    local tmux_cmd="export HEADLESS_MODE='$HEADLESS_MODE'; "
+    local tmux_cmd="export HEADLESS_MODE='$HEADLESS_MODE'; export HEADLESS_EXTRA_INSTRUCTION='${EXTRA_INSTRUCTION//\'/\'\\\'\'}'; "
     if [[ -f "$ENV_FILE" ]]; then
         tmux_cmd+="set -a; source '$ENV_FILE'; set +a; "
     fi

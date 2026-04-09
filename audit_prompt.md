@@ -58,7 +58,18 @@ This applies to ALL statements — proved, sorry'd, and axiom alike.
 
 **Code not matching paper = integrity FAIL. Comment-only errors = WARN.**
 
-### 4. Proof Integrity and Sorry Laundering
+### 4. Argument Faithfulness
+
+For every non-trivial proved theorem/lemma that cites a paper reference, verify that the **proof strategy in the Lean code actually follows the paper's argument**. Open `reference/cghhl2_arxiv_v3.tex` and compare:
+
+- **Proof structure**: Does the Lean proof use the same logical steps, case splits, and intermediate results as the paper? A proof that arrives at the right statement via a completely different argument is suspect.
+- **Key lemma usage**: Does the proof invoke the same intermediate lemmas/propositions the paper cites? If the paper says "by Lemma 3.2 and Proposition 2.5", the Lean proof should depend on the formalizations of those results.
+- **Invented arguments**: Flag any proof that introduces substantial reasoning not present in the paper (novel case analysis, alternative inequalities, different bounding arguments). Small Lean-idiomatic steps (simp, omega, etc.) are fine — but a multi-step argument that doesn't appear in the paper is a red flag.
+- **Skipped steps**: Flag proofs that skip key steps from the paper's argument by axiomatizing intermediate results the paper actually proves.
+
+**A proved theorem whose proof does not follow the paper's argument = integrity FAIL.** Minor variations in proof tactics are acceptable; wholesale replacement of the argument is not.
+
+### 5. Proof Integrity and Sorry Laundering
 
 - No vacuous proofs (unsatisfiable hypotheses, contradictory constants)
 - No `Prop`-valued fields in structures
@@ -66,7 +77,7 @@ This applies to ALL statements — proved, sorry'd, and axiom alike.
 - No axioms that bundle the conclusion of what should be proved
 - Trace dependency chains of key results for satisfiability
 
-### 5. Progress Assessment
+### 6. Progress Assessment
 
 Count sorry's, axioms, proved theorems. Compare against claimed progress.
 
@@ -89,15 +100,18 @@ COMPLETENESS: {N} sorries, {M} axioms, {P} proved
 ### 2. Three-Way Statement Consistency
 {For each statement: name, cited reference, whether (a) paper (b) comment (c) code agree. Flag mismatches.}
 
-### 3. Proof Integrity / Sorry Laundering
+### 3. Argument Faithfulness
+{For each proved theorem with a paper reference: does the Lean proof follow the paper's argument? Flag deviations.}
+
+### 4. Proof Integrity / Sorry Laundering
 {Details}
 
 ## Completeness
 
-### 4. Sorry and Axiom Inventory
+### 5. Sorry and Axiom Inventory
 {Table}
 
-### 5. Progress Assessment
+### 6. Progress Assessment
 {Summary}
 
 ## Action Items (integrity failures only)
