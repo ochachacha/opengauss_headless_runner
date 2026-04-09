@@ -997,6 +997,8 @@ def main() -> None:
     skip_autoformalize = HEADLESS_MODE in ("audit", "fix")
     skip_first_audit = HEADLESS_MODE == "fix"
 
+    quit_after_audit = False
+
     while not _stop_event.is_set():
 
         # ── busy-check (Claude /loop "don't fire if busy" semantics) ────────
@@ -1032,11 +1034,14 @@ def main() -> None:
             log.info("Autoformalize finished  status=%s", status)
 
             # Check if the agent requested a quit (no more meaningful work).
+            # We still run a final audit before exiting — the agent's "quit"
+            # skips future autoformalize cycles but not the integrity check.
             quit_verdict = _done_verdict.pop(task.task_id, "")
-            if quit_verdict == "quit":
-                log.info("Autoformalize agent requested quit — no further work to do. Exiting.")
-                _stop_event.set()
-                break
+            quit_after_audit = quit_verdict == "quit"
+            if quit_after_audit:
+                log.info(
+                    "Autoformalize agent requested quit — will run final audit then exit."
+                )
 
             if _stop_event.is_set():
                 break
@@ -1114,7 +1119,9 @@ def main() -> None:
         cycles += 1
         log.info("Completed full cycle %d", cycles)
 
-        if _stop_event.is_set():
+        if quit_after_audit or _stop_event.is_set():
+            if quit_after_audit:
+                log.info("Quit-after-audit: final audit done — exiting.")
             break
 
         # ── self-update Gauss between cycles ──────────────────────────────
