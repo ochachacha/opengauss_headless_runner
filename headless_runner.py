@@ -89,9 +89,11 @@ DONE_HANDOFF_PHRASE: str = os.environ.get(
 # so the runner doesn't have to race against file I/O to parse the report.
 DONE_HANDOFF_PASS: str = "HEADLESS_RUNNER_HANDOFF_AUDIT_PASS"
 DONE_HANDOFF_FAIL: str = "HEADLESS_RUNNER_HANDOFF_AUDIT_FAIL"
+DONE_HANDOFF_QUIT: str = "HEADLESS_RUNNER_HANDOFF_QUIT"
 _DONE_PATTERNS: list[bytes] = [
     DONE_HANDOFF_PASS.encode(),
     DONE_HANDOFF_FAIL.encode(),
+    DONE_HANDOFF_QUIT.encode(),
     DONE_HANDOFF_PHRASE.encode(),  # generic fallback (autoformalize, fix)
 ]
 
@@ -373,6 +375,8 @@ def _check_idle_timeout() -> None:
                     _done_verdict[task.task_id] = "pass"
                 elif matched == DONE_HANDOFF_FAIL.encode():
                     _done_verdict[task.task_id] = "fail"
+                elif matched == DONE_HANDOFF_QUIT.encode():
+                    _done_verdict[task.task_id] = "quit"
                 else:
                     _done_verdict[task.task_id] = ""
                 log.info(
@@ -723,6 +727,10 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
         "Based on those documents, design the right --claim-select for your session."
         f"\n\nWhen you are done and want to hand off to the audit agent, "
         f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
+        f"\n\nIf you believe there is no further meaningful work to be done "
+        f"(all in-scope claims are formalized, no sorries left to eliminate, "
+        f"no axioms left to prove), print this phrase instead to stop the runner: "
+        f"{DONE_HANDOFF_QUIT}"
     )
     if EXTRA_INSTRUCTION:
         handoff_instruction += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
@@ -1022,6 +1030,13 @@ def main() -> None:
 
             status = _wait_for_task(task)
             log.info("Autoformalize finished  status=%s", status)
+
+            # Check if the agent requested a quit (no more meaningful work).
+            quit_verdict = _done_verdict.pop(task.task_id, "")
+            if quit_verdict == "quit":
+                log.info("Autoformalize agent requested quit — no further work to do. Exiting.")
+                _stop_event.set()
+                break
 
             if _stop_event.is_set():
                 break
