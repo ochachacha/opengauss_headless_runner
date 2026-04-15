@@ -66,6 +66,8 @@ COMPLETENESS: <number> sorries, <number> axioms, <number> proved
 
 Honest `sorry`'s (incomplete work) are NOT integrity failures.
 
+**Any axiom strictly stronger than the paper's corresponding statement IS an integrity FAIL** — see checklist section 1b.
+
 The outer loop finds your report by looking for the most recently modified `.md` file in `audit/`.
 
 ## Audit Checklist
@@ -75,6 +77,20 @@ Apply these checks to each file during Phase 1.
 ### 1. Sorry and Axiom Inventory
 
 List every `sorry` and `axiom` with file, line, name. For each axiom, note whether the project's scope documentation marks it as external (acceptable) or in-scope (integrity failure).
+
+### 1b. Axiom Strength vs Paper (integrity FAIL condition)
+
+For **every** `axiom` declaration in the repository — regardless of whether it is marked external or in-scope — verify that the Lean statement is **not stronger** than the corresponding result in the paper or cited external reference. An axiom is "stronger than the paper" if a logician reading both would say the Lean axiom implies more than the paper's result. Concretely, check for:
+
+- **Dropped hypotheses**: the paper requires conditions (e.g. non-degeneracy, dynamical convexity, specific contact form class) that the Lean axiom omits.
+- **Strengthened conclusions**: the paper concludes `≤` but the axiom states `<`; the paper concludes "exists" but the axiom concludes "unique"; the paper gives a local statement but the axiom makes it global/uniform.
+- **Widened quantifiers**: the paper's "for some small ε₀" becomes the axiom's "for all ε"; the paper's existential becomes a `∀`.
+- **Missing side conditions**: the paper proves the result only after a perturbation / under a genericity assumption, but the axiom asserts it unconditionally.
+- **Type-level strengthening**: the axiom's conclusion is a decidable/computable/constructive form where the paper gives only a classical existence statement.
+
+For each axiom, locate the cited paper result in `reference/cghhl2_arxiv_v3.tex` (or the cited external reference if available) and compare the two statements directly. If the axiom is strictly stronger than what the paper proves, this is an **integrity FAIL** — report it under "Action Items" with file, line, axiom name, the paper citation, and a one-line description of how the axiom exceeds the paper.
+
+An axiom that is *weaker* than the paper is fine (it is giving up information the paper has). An axiom that *matches* the paper is fine. Only strengthening fails.
 
 ### 2. Three-Way Statement Consistency (highest priority)
 
