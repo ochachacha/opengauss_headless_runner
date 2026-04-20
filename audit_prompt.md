@@ -130,7 +130,32 @@ For every non-trivial proved theorem/lemma that cites a paper reference, verify 
 - No axioms that bundle the conclusion of what should be proved
 - Trace dependency chains of key results for satisfiability
 
-### 5. Progress Assessment
+### 5. Citation lint (paper-Lean traceability)
+
+`FORMALIZATION_GUIDE.md` mandates that every `theorem`/`axiom`/`def`/`opaque`/`structure` corresponding to a paper result cite the paper with a **line range** in `reference/cghhl2_arxiv_v3.tex`, in the format:
+
+```
+[CGHHL, <item>, cghhl2_arxiv_v3.tex L<start>-L<end>]
+```
+
+Apply four checks:
+
+**(a) Exists.** For each docstring citation with a line range, verify that:
+- The line range is within the current `cghhl2_arxiv_v3.tex` (i.e. the file has at least `<end>` lines).
+- Reading those lines shows the claimed label or item (e.g. `prop:gsscriterion` appears between L<start> and L<end>).
+
+Report each unresolved line range as a **WARN** (citation rot, not integrity failure) unless the Lean statement is clearly mistargeted — then **FAIL**.
+
+**(b) Vague.** Flag any in-scope `theorem` / `axiom` / `def` whose docstring cites the paper but omits a line range (e.g. `[CGHHL, §3]` with no `L<…>`). Report as **WARN**. Declarations with zero paper citation but that should have one — also **WARN**.
+
+**(c) Order (advisory).** Build a partial dependency graph: if Lean declaration A is consumed by Lean declaration B, and both cite paper line ranges, A's cited range should precede B's. Exceptions are common (paper sometimes forward-references or restates lemmas) — flag reversals as **ADVISORY** only, not as integrity failures.
+
+**(d) Coverage.** Cross-check `reference/paper_to_lean.md`:
+- Each row's Lean identifier must exist at the claimed file:line.
+- Each paper label in the overlay that is **in-scope** per `FORMALIZATION_GUIDE.md` should either have a Lean identifier *or* be explicitly marked "not formalized" / "out of scope".
+- Compute a coverage percentage: (in-scope paper labels with Lean identifier) / (in-scope paper labels). Report the number.
+
+### 6. Progress Assessment
 
 Count sorry's, axioms, proved theorems. Compare against claimed progress.
 
@@ -159,12 +184,18 @@ COMPLETENESS: {N} sorries, {M} axioms, {P} proved
 ### 4. Proof Integrity / Sorry Laundering
 {Details}
 
+### 5. Citation lint
+**Exists (WARN unless misaimed):** {list unresolved line ranges}
+**Vague (WARN):** {list citations missing line ranges + in-scope declarations with no paper citation}
+**Order (advisory):** {list reversed dependency orderings}
+**Coverage:** {N of M in-scope paper labels have Lean identifier (P%)}
+
 ## Completeness
 
-### 5. Sorry and Axiom Inventory
+### 6. Sorry and Axiom Inventory
 {Table}
 
-### 6. Progress Assessment
+### 7. Progress Assessment
 {Summary}
 
 ## Action Items (integrity failures only)
