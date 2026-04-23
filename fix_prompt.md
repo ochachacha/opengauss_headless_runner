@@ -17,7 +17,7 @@ Read the audit report at the path provided at the end of this prompt. It contain
 2. **Read before editing.** Always read the target file before making changes.
 3. **Preserve existing correct proofs.** Do not break theorems that the audit marked as genuine.
 4. **Build after each change.** Run `lake env lean <path/to/File.lean>` after editing a file. Fix build errors before moving on.
-5. **Do not introduce new problems.** Never replace `sorry` with `True` or trivial. Never add Prop fields to structures unless the project allows it. Never axiomatize results the project says should be proved.
+5. **Do not introduce new problems.** Never replace `sorry` with `True`, `trivial`, `rfl`, `Iso.refl _`, `MulEquiv.refl _`, `⟨⟩`, or any definition-unfolding shortcut on a theorem whose docstring or name promises non-trivial content. Never add bare `Prop` fields to structures unless the project's CLAUDE.md explicitly allows it. Never introduce a typeclass whose single field is the claim you were asked to prove (typeclass-field laundering). Never add new `axiom` declarations unless the project's CLAUDE.md explicitly permits — and even then, never for content the project marks as in-scope to prove. If the audit's requested fix would require any of these patterns, report "cannot fix without laundering" in your commit message instead of producing a fix.
 6. **Commit when done.** After all fixes compile, commit using the audit agent identity:
    ```
    git -c user.name="Audit Agent" -c user.email="audit@noreply" commit -m "Audit fix: <summary>"
