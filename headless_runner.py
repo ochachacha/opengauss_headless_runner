@@ -169,8 +169,20 @@ if not AUTOFORMALIZE_ARGS and HEADLESS_MODE == "full":
     )
     sys.exit(1)
 
-# Optional extra instruction appended to all agent prompts (formalize, audit, fix).
+# Optional extra instruction for the agent prompt.  Applied to the FIRST
+# session only (whichever phase runs first per HEADLESS_MODE) and then
+# consumed — subsequent autoformalize/audit/fix sessions do not receive it.
 EXTRA_INSTRUCTION: str = os.environ.get("HEADLESS_EXTRA_INSTRUCTION", "").strip()
+_extra_instruction_consumed: bool = False
+
+
+def _consume_extra_instruction() -> str:
+    """Return EXTRA_INSTRUCTION once, then empty on every subsequent call."""
+    global _extra_instruction_consumed
+    if _extra_instruction_consumed or not EXTRA_INSTRUCTION:
+        return ""
+    _extra_instruction_consumed = True
+    return EXTRA_INSTRUCTION
 
 # Seconds of PTY silence before a session is considered stuck and cancelled.
 IDLE_TIMEOUT: int = int(
@@ -732,8 +744,9 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
         f"no axioms left to prove), print this phrase instead to stop the runner: "
         f"{DONE_HANDOFF_QUIT}"
     )
-    if EXTRA_INSTRUCTION:
-        handoff_instruction += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
+    extra = _consume_extra_instruction()
+    if extra:
+        handoff_instruction += f"\n\nAdditional instruction: {extra}"
     return _spawn_gauss_session(
         config,
         command,
@@ -780,8 +793,9 @@ def _spawn_audit_session() -> Optional[str]:
         f"  - If INTEGRITY: PASS → {DONE_HANDOFF_PASS}\n"
         f"  - If INTEGRITY: FAIL → {DONE_HANDOFF_FAIL}\n"
     )
-    if EXTRA_INSTRUCTION:
-        audit_prompt += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
+    extra = _consume_extra_instruction()
+    if extra:
+        audit_prompt += f"\n\nAdditional instruction: {extra}"
 
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-6")
     argv = [
@@ -923,8 +937,9 @@ def _spawn_fix_session(config: dict) -> Optional[object]:
         f"When you are completely done with all fixes and have committed, "
         f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
     )
-    if EXTRA_INSTRUCTION:
-        prompt += f"\n\nAdditional instruction: {EXTRA_INSTRUCTION}"
+    extra = _consume_extra_instruction()
+    if extra:
+        prompt += f"\n\nAdditional instruction: {extra}"
 
     # Use /prove as the routing command — we only need Gauss staging.
     # The prompt_override replaces the "run /lean4:prove" instruction.
