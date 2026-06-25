@@ -632,8 +632,14 @@ def _spawn_gauss_session(
     except Exception:
         _sd = {}
     _sd["skipDangerousModePermissionPrompt"] = True
-    _sd.setdefault("permissions", {})["allow"] = ["*"]
-    _sd["permissions"]["deny"] = ["AskUserQuestion"]
+    _perms = _sd.setdefault("permissions", {})
+    # Bare "*" is rejected by CC's allow-rule parser ("Wildcard tool name *
+    # is not supported in allow rules"); bypassPermissions mode is the
+    # documented way to auto-approve every tool without prompts. Deny rules
+    # are still enforced in this mode (evaluated before allow).
+    _perms["defaultMode"] = "bypassPermissions"
+    _perms.pop("allow", None)  # drop any stale invalid "*" allow entry
+    _perms["deny"] = ["AskUserQuestion"]
     settings_path.write_text(_json.dumps(_sd, indent=2) + "\n")
     log.info("Wrote permissions + skipDangerousModePermissionPrompt to %s", settings_path)
 
