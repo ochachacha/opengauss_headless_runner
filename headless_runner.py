@@ -436,7 +436,15 @@ def _check_idle_timeout() -> None:
                 fd = task.pty_master_fd
                 if fd is not None:
                     try:
-                        os.write(fd, (f"/goal {cond}\r").encode())
+                        # Write the goal text, then a SEPARATE Enter after a
+                        # brief gap. Claude Code's input layer treats a single
+                        # large PTY burst as a *paste* (collapsed to
+                        # "[Pasted text #N]"); a trailing \r inside that burst is
+                        # absorbed as pasted text instead of submitting. A
+                        # standalone \r after the paste window submits it.
+                        os.write(fd, (f"/goal {cond}").encode())
+                        time.sleep(0.3)
+                        os.write(fd, b"\r")
                         _goal_injected[task.task_id] = now
                         log.info(
                             "Task %s: injected /goal (%d-char condition) after %ds warmup "
