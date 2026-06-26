@@ -347,13 +347,28 @@ def is_busy() -> bool:
 NUDGE_GRACE: int = int(os.environ.get("NUDGE_GRACE_SECONDS", "120"))
 
 
+def _pty_send(fd: int, text: str) -> None:
+    """Type ``text`` into a PTY, then submit with a SEPARATE Enter keystroke.
+
+    Claude Code's input layer treats a single large PTY burst as a *paste*
+    (collapsed to ``[Pasted text #N]``) and absorbs a trailing ``\\r`` inside
+    that burst as pasted text rather than firing it as a submit — leaving the
+    message lingering, unsent, in the input box.  Writing the Enter as its own
+    ``os.write`` after a brief gap makes it land in a separate PTY read so it
+    registers as a real submit regardless of message length.
+    """
+    os.write(fd, text.encode())
+    time.sleep(0.3)
+    os.write(fd, b"\r")
+
+
 def _send_continue(task) -> bool:  # noqa: ANN001
     """Send NUDGE_MESSAGE to the task's PTY.  Returns True on success."""
     fd = task.pty_master_fd
     if fd is None:
         return False
     try:
-        os.write(fd, NUDGE_MESSAGE.encode())
+        _pty_send(fd, NUDGE_MESSAGE)
         return True
     except OSError as exc:
         log.warning("Failed to write to PTY for %s: %s", task.task_id, exc)
@@ -436,15 +451,7 @@ def _check_idle_timeout() -> None:
                 fd = task.pty_master_fd
                 if fd is not None:
                     try:
-                        # Write the goal text, then a SEPARATE Enter after a
-                        # brief gap. Claude Code's input layer treats a single
-                        # large PTY burst as a *paste* (collapsed to
-                        # "[Pasted text #N]"); a trailing \r inside that burst is
-                        # absorbed as pasted text instead of submitting. A
-                        # standalone \r after the paste window submits it.
-                        os.write(fd, (f"/goal {cond}").encode())
-                        time.sleep(0.3)
-                        os.write(fd, b"\r")
+                        _pty_send(fd, f"/goal {cond}")
                         _goal_injected[task.task_id] = now
                         log.info(
                             "Task %s: injected /goal (%d-char condition) after %ds warmup "
@@ -526,7 +533,7 @@ def _check_idle_timeout() -> None:
                 elif nudge_time is None:
                     # autoformalize: nudge (a /goal, if set, survives /compact)
                     if _is_context_limit(task):
-                        msg = "/compact\r"
+                        msg = "/compact"
                         label = "/compact"
                     else:
                         msg = NUDGE_MESSAGE
@@ -540,7 +547,7 @@ def _check_idle_timeout() -> None:
                     fd = task.pty_master_fd
                     if fd is not None:
                         try:
-                            os.write(fd, msg.encode())
+                            _pty_send(fd, msg)
                             _nudge_sent_at[task.task_id] = now
                         except OSError as exc:
                             log.warning("Failed to write to PTY for %s: %s", task.task_id, exc)
