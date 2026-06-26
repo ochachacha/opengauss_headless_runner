@@ -61,6 +61,8 @@ _stuck_detected_at: dict[str, float] = {}  # task_id -> when stuck pattern first
 _task_session_type: dict[str, str] = {}  # task_id -> "autoformalize" | "audit" | "fix"
 _done_latched: dict[str, float] = {}  # task_id -> when done pattern first seen (sticky)
 _done_verdict: dict[str, str] = {}   # task_id -> "pass" | "fail" | "" (from handoff phrase)
+_goal_condition: dict[str, str] = {}  # task_id -> /goal condition to inject (autoformalize)
+_goal_injected: dict[str, float] = {}  # task_id -> when /goal was injected (inject-once guard)
 _orig_remember = _sm_module._remember_recent_output
 
 # Patterns in PTY output that indicate the session is stuck waiting for input
@@ -206,6 +208,55 @@ _pty_log_path: str = os.environ.get("PTY_OUTPUT_LOG", "")
 NUDGE_MESSAGE: str = os.environ.get(
     "NUDGE_MESSAGE", "continue with the most recommended action"
 ) + "\r"
+
+# ---------------------------------------------------------------------------
+# /goal integration (Claude Code 2.1.139+)
+# ---------------------------------------------------------------------------
+# Inject a session-scoped goal into the autoformalize session so it keeps
+# taking turns toward a bounded, self-verifying per-session milestone (a small
+# evaluator model judges the condition after every turn and re-directs Claude
+# until it is met) instead of relying on idle "continue" nudges. A goal also
+# survives /compact. Mechanics:
+#   - The FIRST user message stays the Gauss workflow-staging prompt (so the
+#     lean4 workflow launches normally). The /goal is sent as a FOLLOW-UP PTY
+#     message after a short warmup — exactly the channel the nudge uses.
+#   - The condition references "this session's instructions" so it stays short
+#     (the /goal condition cap is ~4000 chars), and ends by asking the agent to
+#     print the handoff phrase, which is still the clean termination signal.
+#   - The existing idle/stuck/nudge backstop is LEFT UNCHANGED: the goal drives
+#     proactive per-turn continuation, so a goal-driven session rarely idles long
+#     enough to trip the nudge — but if it truly goes silent, the nudge,
+#     context-limit /compact, and wall-clock caps remain the wedge safety net (a
+#     /goal survives both the nudge and /compact).
+# Disable with AUTOFORMALIZE_GOAL_ENABLED=0 to fall back to pure nudging.
+AUTOFORMALIZE_GOAL_ENABLED: bool = os.environ.get(
+    "AUTOFORMALIZE_GOAL_ENABLED", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+# Seconds after a session's first PTY output before the /goal is injected.
+# Lets the Gauss workflow staging / first turn get underway first; the queued
+# /goal message is picked up at the next prompt.
+GOAL_INJECT_DELAY_SECONDS: int = int(os.environ.get("GOAL_INJECT_DELAY_SECONDS", "90"))
+
+# Default per-session goal condition (override via AUTOFORMALIZE_GOAL_CONDITION
+# or headless.conf). Kept short and self-verifying; ends with the handoff phrase
+# so the runner's existing done-pattern detection cleanly ends the session, and
+# carries a turn bound so the goal terminates even on a hard leaf.
+_DEFAULT_AUTOFORMALIZE_GOAL_CONDITION: str = (
+    "Continue the Phase-2 dissolution work described in this session's instructions "
+    "(CLAUDE.md, PROOF_STRATEGY.md § 'Current priority', FORMALIZATION_GUIDE.md): pick the "
+    "cheapest open blueprint leaf and dissolve at least one unit of project debt "
+    "(#axiom + #sorry + #placeholder-opaque) via the blueprint pattern. This goal is MET only "
+    "when, in the surfaced conversation, you have shown (1) a clean `lake build`, (2) the old "
+    "vs new debt metric with a strict decrease, and (3) a git commit of the change — then "
+    f"print {DONE_HANDOFF_PHRASE} on its own line. If you genuinely cannot make progress, stop "
+    "after 40 turns. Never weaken a statement, axiomatize a conclusion, or launder a sorry to "
+    "satisfy this goal; a correctly-stated sorry/blueprint leaf is acceptable and simply does "
+    "not count as debt reduction."
+)
+AUTOFORMALIZE_GOAL_CONDITION: str = os.environ.get(
+    "AUTOFORMALIZE_GOAL_CONDITION", _DEFAULT_AUTOFORMALIZE_GOAL_CONDITION
+).strip()
 
 # Prompt file paths (relative to headless/ dir).
 AUDIT_PROMPT_PATH: Path = Path(
@@ -372,6 +423,34 @@ def _check_idle_timeout() -> None:
     for task in _running_tasks():
         session_type = _task_session_type.get(task.task_id, "autoformalize")
         nudge_time = _nudge_sent_at.get(task.task_id)
+
+        # --- /goal injection: set a session-scoped goal once, after warmup ---
+        # The first user message is the Gauss workflow-staging prompt; the /goal
+        # is sent here as a follow-up PTY message and queued until the next
+        # prompt. Only for tasks with a configured goal that hasn't been injected.
+        cond = _goal_condition.get(task.task_id)
+        if cond and task.task_id not in _goal_injected:
+            first_out = _last_output_at.get(task.task_id)
+            started = task.start_time or first_out or now
+            if first_out is not None and (now - started) >= GOAL_INJECT_DELAY_SECONDS:
+                fd = task.pty_master_fd
+                if fd is not None:
+                    try:
+                        os.write(fd, (f"/goal {cond}\r").encode())
+                        _goal_injected[task.task_id] = now
+                        log.info(
+                            "Task %s: injected /goal (%d-char condition) after %ds warmup "
+                            "— continue-nudge now suppressed for this task",
+                            task.task_id, len(cond), int(now - started),
+                        )
+                    except OSError as exc:
+                        log.warning("Failed to inject /goal for %s: %s", task.task_id, exc)
+
+        # The existing idle/stuck/nudge backstop is left unchanged: /goal drives
+        # proactive per-turn continuation, and a goal-driven session rarely idles
+        # long enough to trip the nudge — but if it truly goes silent, the nudge
+        # and wall-clock cap remain as the wedge safety net (a /goal survives the
+        # nudge and /compact).
         is_nudgeable = session_type == "autoformalize"
 
         # --- Path 0: done-pattern detection (all session types) ---
@@ -437,7 +516,7 @@ def _check_idle_timeout() -> None:
                     mgr.cancel(task.task_id)
                     _stuck_detected_at.pop(task.task_id, None)
                 elif nudge_time is None:
-                    # autoformalize: nudge
+                    # autoformalize: nudge (a /goal, if set, survives /compact)
                     if _is_context_limit(task):
                         msg = "/compact\r"
                         label = "/compact"
@@ -632,6 +711,9 @@ def _spawn_gauss_session(
     except Exception:
         _sd = {}
     _sd["skipDangerousModePermissionPrompt"] = True
+    # /goal is implemented as a session Stop-hook; it is unavailable if hooks are
+    # disabled. Pin hooks on so a stale/managed setting can't silently break it.
+    _sd["disableAllHooks"] = False
     _perms = _sd.setdefault("permissions", {})
     # Bare "*" is rejected by CC's allow-rule parser ("Wildcard tool name *
     # is not supported in allow rules"); bypassPermissions mode is the
@@ -743,22 +825,38 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
     handoff_instruction = (
         "\n\nRead the project's CLAUDE.md, PROOF_STRATEGY.md, and FORMALIZATION_GUIDE.md. "
         "Based on those documents, design the right --claim-select for your session."
-        f"\n\nWhen you are done and want to hand off to the audit agent, "
-        f"print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
-        f"\n\nIf you believe there is no further meaningful work to be done "
-        f"(all in-scope claims are formalized, no sorries left to eliminate, "
-        f"no axioms left to prove), print this phrase instead to stop the runner: "
-        f"{DONE_HANDOFF_QUIT}"
+        f"\n\nWhen you are done with this session's work and want to hand off to the "
+        f"audit agent, print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
+        f"\n\nDo NOT stop the runner just because you ran out of easy work this session. "
+        f"Per CLAUDE.md, Phase 2's goal is to drive the project axiom count to ZERO: every "
+        f"remaining `axiom` and `sorry` is a dissolution target, and there is essentially "
+        f"ALWAYS a cheapest open blueprint leaf to grind. Emit the quit phrase ONLY when you "
+        f"have verified, in THIS session, that the project is genuinely complete — "
+        f"`#print axioms TwoOrInfty.prop_main` reports nothing beyond "
+        f"`[propext, Classical.choice, Quot.sound]`, AND no `sorry` and no project `axiom` "
+        f"remains anywhere in the source tree. In that fully-verified case only, print this "
+        f"phrase to stop the runner: {DONE_HANDOFF_QUIT}"
     )
     extra = _consume_extra_instruction()
     if extra:
         handoff_instruction += f"\n\nAdditional instruction: {extra}"
-    return _spawn_gauss_session(
+    task = _spawn_gauss_session(
         config,
         command,
         prompt_suffix=handoff_instruction,
         description_label="autoformalize",
     )
+    # Schedule a session-scoped /goal injection (see _check_idle_timeout). The
+    # goal keeps this session iterating toward a bounded milestone instead of
+    # relying on idle nudges; it is injected as a follow-up PTY message after a
+    # short warmup so the workflow-staging first message runs first.
+    if task is not None and AUTOFORMALIZE_GOAL_ENABLED and AUTOFORMALIZE_GOAL_CONDITION:
+        _goal_condition[task.task_id] = AUTOFORMALIZE_GOAL_CONDITION
+        log.info(
+            "Task %s: /goal scheduled (inject ~%ds after first output)",
+            task.task_id, GOAL_INJECT_DELAY_SECONDS,
+        )
+    return task
 
 
 def _spawn_audit_session() -> Optional[str]:
@@ -1009,6 +1107,13 @@ def main() -> None:
     )
     if EXTRA_INSTRUCTION:
         log.info("Extra instruction: %s", EXTRA_INSTRUCTION)
+    if AUTOFORMALIZE_GOAL_ENABLED and AUTOFORMALIZE_GOAL_CONDITION:
+        log.info(
+            "Autoformalize /goal injection ENABLED (warmup %ds, %d-char condition)",
+            GOAL_INJECT_DELAY_SECONDS, len(AUTOFORMALIZE_GOAL_CONDITION),
+        )
+    else:
+        log.info("Autoformalize /goal injection disabled — using idle 'continue' nudges")
 
     # On the first iteration, HEADLESS_MODE controls which phases to skip:
     #   "full"  → run all phases

@@ -87,7 +87,7 @@ Apply these checks to each file during Phase 1.
 
 ### 1. Sorry and Axiom Inventory
 
-List every `sorry` and `axiom` with file, line, name. For each axiom, note whether the project's scope documentation marks it as (a) acceptable classical bedrock / external, (b) grandfathered as blocked on external infrastructure, or (c) in-scope (integrity failure if it was recently added or previously a sorry).
+List every `sorry` and `axiom` with file, line, name. Under the project's **Phase 2** goal (drive the axiom count to zero — see CLAUDE.md / FORMALIZATION_GUIDE.md), **every** project `axiom` and `sorry` is a dissolution target / blueprint debt, not a blessed permanent fixture. Their mere existence is a COMPLETENESS matter, **NOT** an integrity failure — the project intentionally carries many atomic blueprint leaves and transient sorries while grinding larger axioms down. For each axiom, judge only whether it is an **integrity** problem: (a) stronger than the paper / cited reference (§1b), (b) a regression — a former `sorry` "filled" by an axiom asserting its own conclusion (§1c), or (c) a laundering pattern (§4). An axiom that is none of these — an honest atomic blueprint leaf, an external-reference placeholder, or the kernel-standard `propext`/`Classical.choice`/`Quot.sound` — passes integrity even though Phase 2 still aims to dissolve it.
 
 ### 1b. Axiom strength vs. paper (integrity FAIL condition)
 
