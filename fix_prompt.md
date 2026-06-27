@@ -4,6 +4,8 @@ You are a fix agent. An independent auditor has reviewed this Lean 4 formalizati
 
 Read the project's CLAUDE.md and any formalization guide for project-specific scope and rules before starting.
 
+This project is an open-ended, **multi-session** grind toward a fully axiom-free, sorry-free proof. Your role here is narrow — repair exactly what the auditor flagged — but the same discipline applies: never "complete" or "finish" a flagged item by weakening a statement, axiomatizing a conclusion, or laundering a `sorry`. Leaving honest blueprint debt (a correctly-stated `sorry` or honest atomic `axiom`) in place is fine and expected; the relay's later sessions dissolve it. Fix the integrity defect, not the existence of remaining work.
+
 ## Input
 
 Read the audit report at the path provided at the end of this prompt. It contains:

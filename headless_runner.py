@@ -244,15 +244,23 @@ GOAL_INJECT_DELAY_SECONDS: int = int(os.environ.get("GOAL_INJECT_DELAY_SECONDS",
 # carries a turn bound so the goal terminates even on a hard leaf.
 _DEFAULT_AUTOFORMALIZE_GOAL_CONDITION: str = (
     "Continue the Phase-2 dissolution work described in this session's instructions "
-    "(CLAUDE.md, PROOF_STRATEGY.md § 'Current priority', FORMALIZATION_GUIDE.md): pick the "
-    "cheapest open blueprint leaf and dissolve at least one unit of project debt "
-    "(#axiom + #sorry + #placeholder-opaque) via the blueprint pattern. This goal is MET only "
-    "when, in the surfaced conversation, you have shown (1) a clean `lake build`, (2) the old "
-    "vs new debt metric with a strict decrease, and (3) a git commit of the change — then "
-    f"print {DONE_HANDOFF_PHRASE} on its own line. If you genuinely cannot make progress, stop "
-    "after 40 turns. Never weaken a statement, axiomatize a conclusion, or launder a sorry to "
-    "satisfy this goal; a correctly-stated sorry/blueprint leaf is acceptable and simply does "
-    "not count as debt reduction."
+    "(CLAUDE.md, PROOF_STRATEGY.md § 'Current priority', FORMALIZATION_GUIDE.md). You are ONE "
+    "shoulder in an open-ended, MULTI-SESSION relay whose finish line is a fully axiom-free, "
+    "sorry-free proof; the runner WILL spawn another session after you, so your job is not to "
+    "finish the project this session — it is to advance it by at least one unit and hand off. "
+    "Pick the cheapest open blueprint leaf and dissolve at least one unit of project debt "
+    "(#axiom + #sorry + #placeholder-opaque) via the blueprint pattern. 'This axiom is too big "
+    "for one session' is NEVER a reason to stop — it is the entire reason the relay exists: "
+    "decompose the big axiom into atomic blueprint leaves and grind ONE of them now. This goal "
+    "is MET only when, in the surfaced conversation, you have shown (1) a clean `lake build`, "
+    "(2) the old vs new debt metric with a strict decrease, and (3) a git commit of the change "
+    f"— then print {DONE_HANDOFF_PHRASE} on its own line to HAND OFF to the auditor. Handing off "
+    "does NOT stop the runner; the next session immediately continues the relay. If after a "
+    "genuine, documented effort you truly cannot reduce debt this session, hand off the SAME way "
+    f"after at most 40 turns — still {DONE_HANDOFF_PHRASE}, NEVER the runner's quit phrase. Never "
+    "weaken a statement, axiomatize a conclusion, or launder a sorry to satisfy this goal; a "
+    "correctly-stated sorry/blueprint leaf is acceptable and simply does not count as debt "
+    "reduction."
 )
 AUTOFORMALIZE_GOAL_CONDITION: str = os.environ.get(
     "AUTOFORMALIZE_GOAL_CONDITION", _DEFAULT_AUTOFORMALIZE_GOAL_CONDITION
@@ -841,19 +849,33 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
         "\n\nRead the project's CLAUDE.md, PROOF_STRATEGY.md, and FORMALIZATION_GUIDE.md. "
         "Based on those documents, design the right --claim-select for your session."
         f"\n\nWhen you are done with this session's work and want to hand off to the "
-        f"audit agent, print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}"
-        f"\n\nDo NOT stop the runner just because you ran out of easy work this session. "
-        f"Per CLAUDE.md, Phase 2's goal is to drive the project axiom count to ZERO: every "
-        f"remaining `axiom` and `sorry` is a dissolution target, and there is essentially "
-        f"ALWAYS a cheapest open blueprint leaf to grind. The stop bar is the auditor's "
-        f"`ACCEPTANCE: ACCEPT` condition: emit the quit phrase ONLY when you have verified, "
-        f"in THIS session, that the project is genuinely complete — `#print axioms "
-        f"TwoOrInfty.prop_main` reports nothing beyond `[propext, Classical.choice, "
-        f"Quot.sound]`, AND no `sorry` and no project `axiom` (laundered or honest) remains "
-        f"anywhere in the source tree. A correctly-stated `sorry` or honest blueprint `axiom` "
-        f"left in the tree does NOT meet the bar — it must be dissolved, never laundered away. "
-        f"In that fully-verified, axiom-free and sorry-free case only, print this phrase to "
-        f"stop the runner: {DONE_HANDOFF_QUIT}"
+        f"audit agent, print exactly this phrase on its own line: {DONE_HANDOFF_PHRASE}. "
+        f"Handing off does NOT stop the runner — it ends YOUR turn, and the runner immediately "
+        f"spawns the next session to keep grinding. This is a deliberate, open-ended, "
+        f"MULTI-SESSION relay: no single session is expected to finish the project, and the "
+        f"correct outcome of almost every session is 'one unit of debt dissolved, then hand "
+        f"off.'"
+        f"\n\nDo NOT stop the runner just because you ran out of easy work, hit a hard axiom, or "
+        f"feel the remaining work is 'too large for one session' or 'a multi-session effort.' "
+        f"That feeling is EXPECTED and is NEVER a reason to quit: the whole design is that many "
+        f"sessions chain together to finish what no single session could. Refusing to engage a "
+        f"deep axiom because it is large is the specific laziness this runner exists to defeat — "
+        f"if a target is too big to dissolve whole, decompose it into atomic sub-axioms (the "
+        f"mandatory blueprint pattern) and grind ONE of them this session. Per CLAUDE.md, Phase "
+        f"2's goal is to drive the project axiom count to ZERO: every remaining `axiom` and "
+        f"`sorry` is a dissolution target, and there is essentially ALWAYS a cheapest open "
+        f"blueprint leaf to grind."
+        f"\n\nThe ONLY stop bar is the auditor's `ACCEPTANCE: ACCEPT` condition: emit the quit "
+        f"phrase ONLY when you have verified, in THIS session, that the project is genuinely "
+        f"complete — `#print axioms TwoOrInfty.prop_main` reports nothing beyond `[propext, "
+        f"Classical.choice, Quot.sound]`, AND no `sorry` and no project `axiom` (laundered or "
+        f"honest) remains anywhere in the source tree. A correctly-stated `sorry` or honest "
+        f"blueprint `axiom` left in the tree does NOT meet the bar — it must be dissolved, never "
+        f"laundered away. In that fully-verified, axiom-free and sorry-free case ONLY, print this "
+        f"phrase to stop the runner: {DONE_HANDOFF_QUIT}. In EVERY other case — including when "
+        f"you are stuck, out of obvious moves, or convinced the rest is too hard for now — hand "
+        f"off with {DONE_HANDOFF_PHRASE} instead and let the relay continue. When in doubt, hand "
+        f"off; never quit."
     )
     extra = _consume_extra_instruction()
     if extra:
@@ -1034,6 +1056,39 @@ def _parse_audit_verdict() -> str:
     return integrity
 
 
+def _parse_audit_acceptance() -> str:
+    """Read the latest audit report and return 'accept', 'reject', or 'unknown'.
+
+    ACCEPTANCE is the project-DONE bar (see audit_prompt.md): ACCEPT only when
+    the tree is simultaneously sorry-free and free of every non-kernel axiom.
+    This is the authoritative gate the runner uses to decide whether the
+    autoformalize agent's quit phrase may actually stop the multi-session
+    relay.  An agent emitting the quit phrase while ACCEPTANCE is REJECT is the
+    'lazy quit' failure mode — the runner ignores it and continues.
+    """
+    report_path = _latest_audit_report()
+    if report_path is None:
+        log.warning("No audit report found in %s/audit/ — cannot parse ACCEPTANCE", PROJECT_ROOT)
+        return "unknown"
+
+    try:
+        text = report_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        log.warning("Could not read audit report for ACCEPTANCE: %s", exc)
+        return "unknown"
+
+    for line in text.splitlines():
+        upper = line.strip().upper()
+        # Only the FIRST acceptance line counts — ignore later body mentions.
+        if upper == "ACCEPTANCE: ACCEPT":
+            return "accept"
+        if upper == "ACCEPTANCE: REJECT":
+            return "reject"
+
+    log.warning("Could not parse ACCEPTANCE from audit report — treating as unknown")
+    return "unknown"
+
+
 def _spawn_fix_session(config: dict) -> Optional[object]:
     """Phase 2b: spawn a Gauss-staged fix agent with lean4-skills.
 
@@ -1184,7 +1239,9 @@ def main() -> None:
             quit_after_audit = quit_verdict == "quit"
             if quit_after_audit:
                 log.info(
-                    "Autoformalize agent requested quit — will run final audit then exit."
+                    "Autoformalize agent requested quit — will run a final audit and exit ONLY "
+                    "if that audit reports ACCEPTANCE: ACCEPT; otherwise the quit is overridden "
+                    "and the relay continues."
                 )
 
             if _stop_event.is_set():
@@ -1263,10 +1320,30 @@ def main() -> None:
         cycles += 1
         log.info("Completed full cycle %d", cycles)
 
-        if quit_after_audit or _stop_event.is_set():
-            if quit_after_audit:
-                log.info("Quit-after-audit: final audit done — exiting.")
+        if _stop_event.is_set():
             break
+
+        if quit_after_audit:
+            # The autoformalize agent asked to stop the relay. Honor it ONLY if
+            # the authoritative ACCEPTANCE bar agrees the project is genuinely
+            # done (sorry-free AND free of every non-kernel axiom). Any remaining
+            # honest axiom/sorry ⇒ ACCEPTANCE: REJECT ⇒ this is a 'lazy quit':
+            # override it and continue the multi-session relay. This makes the
+            # observed "prover quits with honest axioms still open" stop pattern
+            # structurally impossible regardless of agent persuasion.
+            acceptance = _parse_audit_acceptance()
+            if acceptance == "accept":
+                log.info(
+                    "Quit-after-audit: final audit ACCEPTANCE=ACCEPT — project complete, exiting."
+                )
+                break
+            log.warning(
+                "Autoformalize agent emitted the quit phrase, but the latest audit reports "
+                "ACCEPTANCE=%s (project NOT complete — honest axioms/sorries remain). Ignoring "
+                "the lazy quit and continuing the multi-session relay.",
+                acceptance.upper(),
+            )
+            quit_after_audit = False
 
         # ── self-update Gauss between cycles ──────────────────────────────
         _run_gauss_update()
