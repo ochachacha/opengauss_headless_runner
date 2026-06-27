@@ -67,13 +67,24 @@ INTEGRITY: FAIL
 followed by:
 
 ```
+ACCEPTANCE: ACCEPT
+```
+or
+```
+ACCEPTANCE: REJECT
+```
+
+followed by:
+
+```
 COMPLETENESS: <number> sorries, <number> axioms, <number> proved
 ```
 
-- **INTEGRITY** gates the fix agent. FAIL = bugs the fixer must repair. PASS = codebase is honest.
+- **INTEGRITY** gates the fix agent. FAIL = honesty/laundering bugs the fixer must repair. PASS = codebase is honest. This is independent of how much work remains: an honest, sorry-laden, axiom-laden tree can still be `INTEGRITY: PASS`.
+- **ACCEPTANCE** is the project-done bar. `ACCEPT` **only** when the tree is simultaneously (a) sorry-free everywhere, and (b) free of every project `axiom` — i.e. `#print axioms TwoOrInfty.prop_main` reports nothing beyond the three kernel axioms `propext`, `Classical.choice`, `Quot.sound`, and no `axiom` declaration remains anywhere in the source tree. Any remaining honest `sorry` or any remaining non-kernel `axiom` ⇒ `ACCEPTANCE: REJECT`. Acceptance additionally requires `INTEGRITY: PASS` (a dishonest tree is never acceptable) — so `INTEGRITY: FAIL` forces `ACCEPTANCE: REJECT`.
 - **COMPLETENESS** is informational.
 
-Honest `sorry`'s (incomplete work) are NOT integrity failures.
+Honest `sorry`'s and honest (non-laundered) `axiom`'s (incomplete work / blueprint debt) are NOT integrity failures — they keep `INTEGRITY: PASS`. They DO, however, block acceptance: any remaining honest `sorry` or `axiom` makes `ACCEPTANCE: REJECT`. Cheating mechanisms — sorry-laundering, axiom-laundering, and every other pattern in section 4 — remain `INTEGRITY: FAIL`.
 
 **Any axiom strictly stronger than the paper's corresponding statement IS an integrity FAIL** — see checklist section 1b.
 
@@ -87,7 +98,9 @@ Apply these checks to each file during Phase 1.
 
 ### 1. Sorry and Axiom Inventory
 
-List every `sorry` and `axiom` with file, line, name. Under the project's **Phase 2** goal (drive the axiom count to zero — see CLAUDE.md / FORMALIZATION_GUIDE.md), **every** project `axiom` and `sorry` is a dissolution target / blueprint debt, not a blessed permanent fixture. Their mere existence is a COMPLETENESS matter, **NOT** an integrity failure — the project intentionally carries many atomic blueprint leaves and transient sorries while grinding larger axioms down. For each axiom, judge only whether it is an **integrity** problem: (a) stronger than the paper / cited reference (§1b), (b) a regression — a former `sorry` "filled" by an axiom asserting its own conclusion (§1c), or (c) a laundering pattern (§4). An axiom that is none of these — an honest atomic blueprint leaf, an external-reference placeholder, or the kernel-standard `propext`/`Classical.choice`/`Quot.sound` — passes integrity even though Phase 2 still aims to dissolve it.
+List every `sorry` and `axiom` with file, line, name. Under the project's **Phase 2** goal (drive the axiom count to zero — see CLAUDE.md / FORMALIZATION_GUIDE.md), **every** project `axiom` and `sorry` is a dissolution target / blueprint debt, not a blessed permanent fixture. Their mere existence is a COMPLETENESS matter and an **ACCEPTANCE** matter, **NOT** an integrity failure — the project intentionally carries many atomic blueprint leaves and transient sorries while grinding larger axioms down. For each axiom, judge only whether it is an **integrity** problem: (a) stronger than the paper / cited reference (§1b), (b) a regression — a former `sorry` "filled" by an axiom asserting its own conclusion (§1c), or (c) a laundering pattern (§4). An axiom that is none of these — an honest atomic blueprint leaf, an external-reference placeholder, or the kernel-standard `propext`/`Classical.choice`/`Quot.sound` — passes integrity even though Phase 2 still aims to dissolve it.
+
+**For the ACCEPTANCE verdict, no project axiom is grandfathered.** Every `axiom` declaration other than the three kernel axioms (`propext`, `Classical.choice`, `Quot.sound`) — and every `sorry` — blocks `ACCEPTANCE: ACCEPT`, however honest it is. Honest blueprint leaves keep `INTEGRITY: PASS` but still force `ACCEPTANCE: REJECT` until they are genuinely dissolved (not laundered). If the inventory is empty of sorries and of non-kernel axioms and integrity passes, the verdict is `ACCEPTANCE: ACCEPT`.
 
 ### 1b. Axiom strength vs. paper (integrity FAIL condition)
 
@@ -168,6 +181,7 @@ Count sorries, axioms, proved theorems. Compare against claimed progress in any 
 
 ```markdown
 INTEGRITY: {PASS or FAIL}
+ACCEPTANCE: {ACCEPT or REJECT}
 COMPLETENESS: {N} sorries, {M} axioms, {P} proved
 
 # Audit Report — {date}

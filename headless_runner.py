@@ -845,12 +845,15 @@ def _spawn_autoformalize_session(config: dict) -> Optional[object]:
         f"\n\nDo NOT stop the runner just because you ran out of easy work this session. "
         f"Per CLAUDE.md, Phase 2's goal is to drive the project axiom count to ZERO: every "
         f"remaining `axiom` and `sorry` is a dissolution target, and there is essentially "
-        f"ALWAYS a cheapest open blueprint leaf to grind. Emit the quit phrase ONLY when you "
-        f"have verified, in THIS session, that the project is genuinely complete — "
-        f"`#print axioms TwoOrInfty.prop_main` reports nothing beyond "
-        f"`[propext, Classical.choice, Quot.sound]`, AND no `sorry` and no project `axiom` "
-        f"remains anywhere in the source tree. In that fully-verified case only, print this "
-        f"phrase to stop the runner: {DONE_HANDOFF_QUIT}"
+        f"ALWAYS a cheapest open blueprint leaf to grind. The stop bar is the auditor's "
+        f"`ACCEPTANCE: ACCEPT` condition: emit the quit phrase ONLY when you have verified, "
+        f"in THIS session, that the project is genuinely complete — `#print axioms "
+        f"TwoOrInfty.prop_main` reports nothing beyond `[propext, Classical.choice, "
+        f"Quot.sound]`, AND no `sorry` and no project `axiom` (laundered or honest) remains "
+        f"anywhere in the source tree. A correctly-stated `sorry` or honest blueprint `axiom` "
+        f"left in the tree does NOT meet the bar — it must be dissolved, never laundered away. "
+        f"In that fully-verified, axiom-free and sorry-free case only, print this phrase to "
+        f"stop the runner: {DONE_HANDOFF_QUIT}"
     )
     extra = _consume_extra_instruction()
     if extra:
