@@ -63,6 +63,8 @@ _done_latched: dict[str, float] = {}  # task_id -> when done pattern first seen 
 _done_verdict: dict[str, str] = {}   # task_id -> "pass" | "fail" | "" (from handoff phrase)
 _goal_condition: dict[str, str] = {}  # task_id -> /goal condition to inject (autoformalize)
 _goal_injected: dict[str, float] = {}  # task_id -> when /goal was injected (inject-once guard)
+_disconnect_latched: dict[str, float] = {}  # task_id -> when we last resumed after a disconnect
+_disconnect_resumed_count: dict[str, int] = {}  # task_id -> consecutive disconnect resumes
 _orig_remember = _sm_module._remember_recent_output
 
 # Patterns in PTY output that indicate the session is stuck waiting for input
@@ -80,6 +82,17 @@ _CONTEXT_LIMIT_PATTERNS: list[bytes] = [
     b"Context limit reached",
     b"context limit reached",
     b"limit reached",
+]
+
+# Transient API/stream failures the *child* Claude Code CLI prints inline when
+# the streaming HTTP connection drops mid-response. The turn ends and the agent
+# idles, but the session process is alive and the conversation is intact, so the
+# right recovery is to resume in place (send "continue") — NOT to wait out the
+# full idle timer or cancel + re-run the whole phase. Kept deliberately narrow:
+# match only the recoverable mid-stream drop, not persistent errors (401, 529
+# overloaded, etc.) where an instant retry would just hammer a failing API.
+_DISCONNECT_PATTERNS: list[bytes] = [
+    b"Connection closed mid-response",
 ]
 
 # Pattern the autoformalize agent emits when it wants to hand off.
@@ -102,6 +115,22 @@ _DONE_PATTERNS: list[bytes] = [
 # How long a stuck pattern must persist before we nudge (seconds).
 # Avoids reacting to transient messages that scroll past.
 STUCK_DETECT_DELAY: int = int(os.environ.get("STUCK_DETECT_DELAY_SECONDS", "30"))
+
+# --- Transient-disconnect recovery (see _DISCONNECT_PATTERNS) ---
+# Seconds of PTY silence after the disconnect message before we declare the turn
+# truly dead and resume (short — the stream has already ended, we just confirm
+# it isn't a momentary pause).
+DISCONNECT_RESUME_DELAY: int = int(os.environ.get("DISCONNECT_RESUME_DELAY_SECONDS", "5"))
+# Minimum gap between successive resume attempts on the same task, so we don't
+# re-fire while our own "continue" echo / the model's reply is still streaming
+# and the error text lingers in the PTY tail buffer.
+DISCONNECT_RESUME_COOLDOWN: int = int(
+    os.environ.get("DISCONNECT_RESUME_COOLDOWN_SECONDS", "30")
+)
+# Max consecutive resume attempts before giving up and falling back to cancel.
+# Bounds the loop so a genuine API outage can't become an infinite resume spin.
+# The budget resets once a clean resume flushes the error from the PTY tail.
+MAX_DISCONNECT_RESUMES: int = int(os.environ.get("MAX_DISCONNECT_RESUMES", "3"))
 
 # After the done pattern is seen, how long the PTY must be silent before
 # we treat the handoff as complete.  This allows subagents to finish.
@@ -427,6 +456,15 @@ def _check_stuck_pattern(task) -> bool:  # noqa: ANN001
     return any(pat in tail for pat in _STUCK_PATTERNS)
 
 
+def _check_disconnect_pattern(task) -> bool:  # noqa: ANN001
+    """Return True if the PTY tail contains a transient API-disconnect message."""
+    buf = getattr(task, "_recent_output", None)
+    if not buf:
+        return False
+    tail = bytes(buf[-4096:]) if len(buf) > 4096 else bytes(buf)
+    return any(pat in tail for pat in _DISCONNECT_PATTERNS)
+
+
 def _is_context_limit(task) -> bool:  # noqa: ANN001
     """Return True if the stuck state is specifically a context limit."""
     buf = getattr(task, "_recent_output", None)
@@ -541,6 +579,58 @@ def _check_idle_timeout() -> None:
             # While latched but not yet silent, skip nudge/stuck checks —
             # the agent is wrapping up.
             continue
+
+        # --- Path 1.5: transient API-disconnect recovery (all session types) ---
+        # The child printed "Connection closed mid-response": the streaming turn
+        # died but the session is alive. Resume in place rather than waiting out
+        # the idle timer (autoformalize) or cancelling + re-running the whole
+        # phase (audit/fix). This deliberately overrides the audit/fix "never
+        # nudge" rule: a mid-turn disconnect is a transient failure, distinct
+        # from an idle session that is legitimately done. Bounded by
+        # MAX_DISCONNECT_RESUMES so a real outage falls through to cancel.
+        if _check_disconnect_pattern(task):
+            latched_at = _disconnect_latched.get(task.task_id)
+            # Don't re-fire while a prior resume's echo/reply is still streaming
+            # (the error text lingers in the tail until it scrolls out).
+            if latched_at is not None and (now - latched_at) < DISCONNECT_RESUME_COOLDOWN:
+                continue
+            last_output = _last_output_at.get(task.task_id, now)
+            # Confirm the stream really ended (not a momentary mid-stream pause).
+            if (now - last_output) < DISCONNECT_RESUME_DELAY:
+                continue
+            count = _disconnect_resumed_count.get(task.task_id, 0)
+            if count >= MAX_DISCONNECT_RESUMES:
+                log.warning(
+                    "Task %s (%s): API disconnect persisted after %d resume "
+                    "attempts — cancelling (fall back to phase retry)",
+                    task.task_id, session_type, count,
+                )
+                mgr.cancel(task.task_id)
+                _disconnect_latched.pop(task.task_id, None)
+                _disconnect_resumed_count.pop(task.task_id, None)
+                continue
+            log.warning(
+                "Task %s (%s): API disconnect detected — resuming in place "
+                "(attempt %d/%d)",
+                task.task_id, session_type, count + 1, MAX_DISCONNECT_RESUMES,
+            )
+            if _send_continue(task):
+                _disconnect_latched[task.task_id] = now
+                _disconnect_resumed_count[task.task_id] = count + 1
+            else:
+                log.warning(
+                    "Task %s has no writable PTY for disconnect resume — cancelling",
+                    task.task_id,
+                )
+                mgr.cancel(task.task_id)
+                _disconnect_latched.pop(task.task_id, None)
+                _disconnect_resumed_count.pop(task.task_id, None)
+            continue
+        else:
+            # Error text has scrolled out of the tail — a clean resume produced
+            # fresh output. Clear the latch and refill the retry budget.
+            _disconnect_latched.pop(task.task_id, None)
+            _disconnect_resumed_count.pop(task.task_id, None)
 
         # --- Path 2: stuck-pattern detection (bypasses silence timer) ---
         if _check_stuck_pattern(task):
