@@ -297,6 +297,31 @@ def _load_dotenv(path: str = "~/.env") -> dict[str, str]:
             result[key] = value
     return result
 
+
+def _sanitize_auth_env(env: dict) -> dict:
+    """Strip dead/misleading Anthropic auth vars from a child's environment.
+
+    This project authenticates Claude Code via OAuth (auth_mode=auto + the
+    managed-home ``.credentials.json``), not an API key.  Two credential vars
+    leak in from the Gauss/OpenGauss launch environment and only cause trouble:
+
+    - ``ANTHROPIC_TOKEN`` — a Gauss api-key-mode artifact (an ``sk-ant-oat``
+      token).  Claude Code does not recognize this var at all; it is pure noise
+      that misleads auth debugging.
+    - ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` when **empty** — a present
+      but blank key can shadow OAuth auth and is a 401 footgun.
+
+    A genuinely non-empty ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` (e.g. a
+    custom endpoint configured via ``<model>.env``) is preserved, as is
+    ``ANTHROPIC_MODEL`` and every other forwarded var.  Mutates and returns
+    ``env`` for convenience.
+    """
+    env.pop("ANTHROPIC_TOKEN", None)
+    for _k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        if not env.get(_k):  # unset or empty string
+            env.pop(_k, None)
+    return env
+
 # ---------------------------------------------------------------------------
 # Open PTY output log if configured
 # ---------------------------------------------------------------------------
@@ -728,6 +753,41 @@ def _spawn_gauss_session(
 
     settings_dir = backend_home / ".claude"
     settings_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keep the managed-home OAuth credentials in sync with the live ~/.claude on
+    # every spawn. auth_mode=auto copies .credentials.json into the managed home
+    # once at staging, but OAuth refresh tokens ROTATE on use and the two homes
+    # share one token lineage: whichever home last refreshed holds the only valid
+    # refresh token; the other's is dead. A stale copy -> the child can't refresh
+    # -> 401 "Please run /login".
+    #
+    # Sync toward whichever side is FRESHER (larger expiresAt), in EITHER
+    # direction. A blind live->managed copy would be wrong when only autonomous
+    # (managed-home) runners are active: the managed child self-refreshes and
+    # rotates the token, and a live->managed copy would then clobber the good
+    # rotated token with the live home's now-dead one. Copying the fresher side
+    # onto the staler keeps both homes alive regardless of who refreshed last.
+    _live_creds = Path.home() / ".claude" / ".credentials.json"
+    _managed_creds = settings_dir / ".credentials.json"
+
+    def _cred_expiry(p):
+        try:
+            return _json.loads(p.read_text())["claudeAiOauth"]["expiresAt"]
+        except Exception:
+            return None
+
+    try:
+        _live_exp = _cred_expiry(_live_creds) if _live_creds.is_file() else None
+        _mgd_exp = _cred_expiry(_managed_creds) if _managed_creds.is_file() else None
+        if _live_exp is not None and (_mgd_exp is None or _live_exp > _mgd_exp):
+            shutil.copy2(_live_creds, _managed_creds)
+            log.info("Synced OAuth credentials live -> managed (live is fresher)")
+        elif _mgd_exp is not None and (_live_exp is None or _mgd_exp > _live_exp):
+            shutil.copy2(_managed_creds, _live_creds)
+            log.info("Synced OAuth credentials managed -> live (managed is fresher)")
+    except Exception as exc:
+        log.warning("Could not sync OAuth credentials between homes: %s", exc)
+
     settings_path = settings_dir / "settings.json"
     try:
         _sd = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
@@ -787,8 +847,9 @@ def _spawn_gauss_session(
     )
     for key in _FORWARD_KEYS:
         val = os.environ.get(key)
-        if val is not None:
+        if val:  # forward only non-empty values (an empty key is a 401 footgun)
             spawn_env[key] = val
+    _sanitize_auth_env(spawn_env)
 
     # Rewrite --model in argv if ANTHROPIC_MODEL is set.
     override_model = os.environ.get("ANTHROPIC_MODEL")
@@ -929,6 +990,7 @@ def _spawn_audit_session() -> Optional[str]:
     spawn_env = dict(os.environ)
     _dotenv = _load_dotenv()
     spawn_env.update(_dotenv)
+    _sanitize_auth_env(spawn_env)
 
     audit_prompt += (
         f"\n\nWhen you are completely done writing the audit report, "
