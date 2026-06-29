@@ -95,6 +95,31 @@ _DISCONNECT_PATTERNS: list[bytes] = [
     b"Connection closed mid-response",
 ]
 
+# Terminal auth failures the child Claude Code CLI prints when its OAuth
+# credentials are dead and it cannot refresh them. Unlike a mid-stream
+# disconnect (recoverable by resuming) or an idle session (recoverable by
+# respawning), this is NOT recoverable by the runner: every respawn will hit the
+# same wall and burn cycles forever. The ONLY fix is a human running /login. So
+# when this is seen the runner stops the whole loop (sets _stop_event) instead
+# of cancelling + rebooting the agent. Kept narrow + specific so normal output
+# (or an agent merely mentioning "/login") cannot trip it.
+_LOGIN_REQUIRED_PATTERNS: list[bytes] = [
+    b"Please run /login",
+    b"please run /login",
+    b"Not logged in",
+    b"Invalid API key",
+    b"OAuth token has expired",
+    b"OAuth authentication is currently not supported",
+]
+
+# Set (in addition to _stop_event) when the runner stops because of a terminal
+# auth failure, so main() can log a distinct diagnostic and exit non-zero.
+_login_failure_event = threading.Event()
+# Seconds a login-required pattern must persist before we act, so a single
+# fragmented/transient PTY frame can't stop the loop on its own.
+LOGIN_CONFIRM_DELAY: int = int(os.environ.get("LOGIN_CONFIRM_DELAY_SECONDS", "20"))
+_login_detected_at: dict[str, float] = {}  # task_id -> when login-required first seen
+
 # Pattern the autoformalize agent emits when it wants to hand off.
 # The agent should print this exact phrase when it is done.
 DONE_HANDOFF_PHRASE: str = os.environ.get(
@@ -351,6 +376,54 @@ def _sanitize_auth_env(env: dict) -> dict:
             env.pop(_k, None)
     return env
 
+
+# Path to the managed-home OAuth credentials, remembered from the last
+# Gauss-staged spawn so the audit phase (which runs against the LIVE ~/.claude
+# home, not the managed one) can also be kept in sync. See _sync_oauth_creds.
+_last_managed_creds: "Optional[Path]" = None
+
+
+def _cred_expiry(p: "Path"):
+    """Return the OAuth access-token expiry (epoch ms) from a .credentials.json, or None."""
+    import json as _json
+    try:
+        return _json.loads(p.read_text())["claudeAiOauth"]["expiresAt"]
+    except Exception:
+        return None
+
+
+def _sync_oauth_creds(managed_creds: "Optional[Path]") -> None:
+    """Sync OAuth credentials between the live ~/.claude home and a managed home.
+
+    OAuth refresh tokens ROTATE on use, and the live + managed homes share one
+    token lineage: whichever home last refreshed holds the only valid refresh
+    token; the other's is dead. A stale copy -> the child can't refresh -> the
+    401 "Please run /login" failure. Copying the FRESHER side (larger expiresAt)
+    onto the staler one, in EITHER direction, keeps both homes alive regardless
+    of which one last refreshed.
+
+    Called before every spawn — including the audit phase, which runs against
+    the live home and would otherwise inherit a token the managed home rotated
+    out from under it during the preceding autoformalize session.
+
+    No-op if ``managed_creds`` is None (no managed home known yet).
+    """
+    if managed_creds is None:
+        return
+    live_creds = Path.home() / ".claude" / ".credentials.json"
+    try:
+        live_exp = _cred_expiry(live_creds) if live_creds.is_file() else None
+        mgd_exp = _cred_expiry(managed_creds) if managed_creds.is_file() else None
+        if live_exp is not None and (mgd_exp is None or live_exp > mgd_exp):
+            shutil.copy2(live_creds, managed_creds)
+            log.info("Synced OAuth credentials live -> managed (live is fresher)")
+        elif mgd_exp is not None and (live_exp is None or mgd_exp > live_exp):
+            managed_creds.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(managed_creds, live_creds)
+            log.info("Synced OAuth credentials managed -> live (managed is fresher)")
+    except Exception as exc:
+        log.warning("Could not sync OAuth credentials between homes: %s", exc)
+
 # ---------------------------------------------------------------------------
 # Open PTY output log if configured
 # ---------------------------------------------------------------------------
@@ -465,6 +538,15 @@ def _check_disconnect_pattern(task) -> bool:  # noqa: ANN001
     return any(pat in tail for pat in _DISCONNECT_PATTERNS)
 
 
+def _check_login_required(task) -> bool:  # noqa: ANN001
+    """Return True if the PTY tail shows a terminal (non-recoverable) auth failure."""
+    buf = getattr(task, "_recent_output", None)
+    if not buf:
+        return False
+    tail = bytes(buf[-4096:]) if len(buf) > 4096 else bytes(buf)
+    return any(pat in tail for pat in _LOGIN_REQUIRED_PATTERNS)
+
+
 def _is_context_limit(task) -> bool:  # noqa: ANN001
     """Return True if the stuck state is specifically a context limit."""
     buf = getattr(task, "_recent_output", None)
@@ -499,7 +581,9 @@ def _check_idle_timeout() -> None:
       on hard idle timeout as a safety net.
 
     Detection paths:
-    0. Done-pattern: agent emitted DONE_HANDOFF_PHRASE → cancel gracefully.
+    0. Login-required: PTY shows a terminal auth failure ("Please run /login")
+       → STOP the whole loop (do not respawn; a human must re-authenticate).
+    0b. Done-pattern: agent emitted DONE_HANDOFF_PHRASE → cancel gracefully.
     1. Silence-based: PTY goes truly quiet for IDLE_TIMEOUT seconds.
     2. Stuck-pattern: PTY keeps redrawing but output contains a known
        stuck message (e.g. "Context limit reached").
@@ -509,6 +593,40 @@ def _check_idle_timeout() -> None:
     for task in _running_tasks():
         session_type = _task_session_type.get(task.task_id, "autoformalize")
         nudge_time = _nudge_sent_at.get(task.task_id)
+
+        # --- Path 0: terminal auth failure → STOP the whole loop ---
+        # A dead-credentials "Please run /login" is not recoverable by the
+        # runner: cancelling + respawning just hits the same wall forever. Stop
+        # the entire loop and let a human re-authenticate. Confirm the pattern
+        # persists for LOGIN_CONFIRM_DELAY first so a single fragmented PTY frame
+        # can't trip it. This is checked before everything else (done/disconnect/
+        # stuck/idle) so no other path can mask or "recover" from it.
+        if _check_login_required(task):
+            first_seen = _login_detected_at.get(task.task_id)
+            if first_seen is None:
+                _login_detected_at[task.task_id] = now
+                log.warning(
+                    "Task %s (%s): terminal auth failure detected in PTY output "
+                    "('Please run /login' or similar) — will STOP the loop in %ds "
+                    "if it persists. Re-authenticate with `claude` / /login.",
+                    task.task_id, session_type, LOGIN_CONFIRM_DELAY,
+                )
+            elif now - first_seen >= LOGIN_CONFIRM_DELAY:
+                log.error(
+                    "Task %s (%s): terminal auth failure persisted for %ds — "
+                    "STOPPING the headless loop (NOT respawning). The OAuth "
+                    "credentials are dead and cannot be refreshed; a human must "
+                    "run `claude` and /login. See ~/.claude/.credentials.json.",
+                    task.task_id, session_type, int(now - first_seen),
+                )
+                mgr.cancel(task.task_id)
+                _login_detected_at.pop(task.task_id, None)
+                _login_failure_event.set()
+                _stop_event.set()
+            continue
+        else:
+            # Pattern gone (e.g. a clean resume scrolled it out) — clear state.
+            _login_detected_at.pop(task.task_id, None)
 
         # --- /goal injection: set a session-scoped goal once, after warmup ---
         # The first user message is the Gauss workflow-staging prompt; the /goal
@@ -857,26 +975,9 @@ def _spawn_gauss_session(
     # rotates the token, and a live->managed copy would then clobber the good
     # rotated token with the live home's now-dead one. Copying the fresher side
     # onto the staler keeps both homes alive regardless of who refreshed last.
-    _live_creds = Path.home() / ".claude" / ".credentials.json"
-    _managed_creds = settings_dir / ".credentials.json"
-
-    def _cred_expiry(p):
-        try:
-            return _json.loads(p.read_text())["claudeAiOauth"]["expiresAt"]
-        except Exception:
-            return None
-
-    try:
-        _live_exp = _cred_expiry(_live_creds) if _live_creds.is_file() else None
-        _mgd_exp = _cred_expiry(_managed_creds) if _managed_creds.is_file() else None
-        if _live_exp is not None and (_mgd_exp is None or _live_exp > _mgd_exp):
-            shutil.copy2(_live_creds, _managed_creds)
-            log.info("Synced OAuth credentials live -> managed (live is fresher)")
-        elif _mgd_exp is not None and (_live_exp is None or _mgd_exp > _live_exp):
-            shutil.copy2(_managed_creds, _live_creds)
-            log.info("Synced OAuth credentials managed -> live (managed is fresher)")
-    except Exception as exc:
-        log.warning("Could not sync OAuth credentials between homes: %s", exc)
+    global _last_managed_creds
+    _last_managed_creds = settings_dir / ".credentials.json"
+    _sync_oauth_creds(_last_managed_creds)
 
     settings_path = settings_dir / "settings.json"
     try:
@@ -1081,6 +1182,12 @@ def _spawn_audit_session() -> Optional[str]:
     _dotenv = _load_dotenv()
     spawn_env.update(_dotenv)
     _sanitize_auth_env(spawn_env)
+
+    # The audit runs against the LIVE ~/.claude home (not a managed one). If the
+    # preceding autoformalize session rotated the shared OAuth refresh token in
+    # the managed home, the live token is now dead. Sync fresher-wins first so
+    # the audit doesn't immediately hit "Please run /login".
+    _sync_oauth_creds(_last_managed_creds)
 
     audit_prompt += (
         f"\n\nWhen you are completely done writing the audit report, "
@@ -1503,6 +1610,16 @@ def main() -> None:
     log.info("Headless runner stopped after %d cycle(s)", cycles)
     if _pty_output_log is not None:
         _pty_output_log.close()
+
+    if _login_failure_event.is_set():
+        log.error(
+            "═══ STOPPED: terminal authentication failure ═══\n"
+            "The headless loop halted because Claude Code reported dead OAuth "
+            "credentials ('Please run /login'). These cannot be auto-refreshed. "
+            "To resume: run `claude` interactively and complete /login, then "
+            "restart the runner (e.g. `headless/run_tmux.sh restart`)."
+        )
+        sys.exit(2)
 
 
 if __name__ == "__main__":
