@@ -392,6 +392,27 @@ def _cred_expiry(p: "Path"):
         return None
 
 
+def _cred_has_tokens(p: "Path") -> bool:
+    """Return True iff ``p`` holds a USABLE OAuth credential — a .credentials.json
+    whose ``claudeAiOauth`` block has BOTH a non-empty accessToken AND a non-empty
+    refreshToken.
+
+    When a token refresh hard-fails, the Claude CLI leaves the file in place but
+    BLANKS the tokens (accessToken="" / refreshToken="") while keeping the metadata
+    (scopes / subscriptionType / rateLimitTier) and often an ``expiresAt`` of 0 (or a
+    stale non-zero value). Such a husk is worthless as a sync *source*: copying it
+    over a still-good credential destroys a working login. Treat it as no-credential.
+    """
+    import json as _json
+    try:
+        oauth = _json.loads(p.read_text()).get("claudeAiOauth") or {}
+        return bool(str(oauth.get("accessToken", "")).strip()) and bool(
+            str(oauth.get("refreshToken", "")).strip()
+        )
+    except Exception:
+        return False
+
+
 def _sync_oauth_creds(managed_creds: "Optional[Path]") -> None:
     """Sync OAuth credentials between the live ~/.claude home and a managed home.
 
@@ -401,6 +422,16 @@ def _sync_oauth_creds(managed_creds: "Optional[Path]") -> None:
     401 "Please run /login" failure. Copying the FRESHER side (larger expiresAt)
     onto the staler one, in EITHER direction, keeps both homes alive regardless
     of which one last refreshed.
+
+    CRITICAL — never propagate a token-less husk. A credentials file whose
+    accessToken/refreshToken are blank (what the CLI writes after a failed
+    refresh) can still carry a stale-or-zero ``expiresAt``, so a naive
+    fresher-wins compare can copy the EMPTY tokens over a still-good credential
+    and brick BOTH homes — the permanent "Please run /login" spin. So a populated
+    credential ALWAYS wins over a blank one regardless of expiresAt; fresher-wins
+    by expiresAt applies only when BOTH sides are populated; and when neither side
+    is populated we leave both untouched and warn (a human must re-login — there is
+    nothing valid to propagate).
 
     Called before every spawn — including the audit phase, which runs against
     the live home and would otherwise inherit a token the managed home rotated
@@ -412,8 +443,32 @@ def _sync_oauth_creds(managed_creds: "Optional[Path]") -> None:
         return
     live_creds = Path.home() / ".claude" / ".credentials.json"
     try:
-        live_exp = _cred_expiry(live_creds) if live_creds.is_file() else None
-        mgd_exp = _cred_expiry(managed_creds) if managed_creds.is_file() else None
+        live_ok = live_creds.is_file() and _cred_has_tokens(live_creds)
+        mgd_ok = managed_creds.is_file() and _cred_has_tokens(managed_creds)
+
+        # A populated credential always beats a blank husk: heal the dead side
+        # from the live one instead of letting the husk win on a stale expiresAt.
+        if live_ok and not mgd_ok:
+            managed_creds.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(live_creds, managed_creds)
+            log.info("Synced OAuth credentials live -> managed (managed had no usable tokens)")
+            return
+        if mgd_ok and not live_ok:
+            shutil.copy2(managed_creds, live_creds)
+            log.info("Synced OAuth credentials managed -> live (live had no usable tokens)")
+            return
+        if not live_ok and not mgd_ok:
+            log.warning(
+                "Both live and managed OAuth credentials are missing or blank — "
+                "refusing to propagate an empty credential. A human must run "
+                "`claude` and /login to restore auth; the loop cannot self-heal "
+                "from a fully blank token lineage."
+            )
+            return
+
+        # Both populated: fresher (larger expiresAt) wins, in either direction.
+        live_exp = _cred_expiry(live_creds)
+        mgd_exp = _cred_expiry(managed_creds)
         if live_exp is not None and (mgd_exp is None or live_exp > mgd_exp):
             shutil.copy2(live_creds, managed_creds)
             log.info("Synced OAuth credentials live -> managed (live is fresher)")
@@ -539,12 +594,25 @@ def _check_disconnect_pattern(task) -> bool:  # noqa: ANN001
 
 
 def _check_login_required(task) -> bool:  # noqa: ANN001
-    """Return True if the PTY tail shows a terminal (non-recoverable) auth failure."""
+    """Return True if the PTY output shows a terminal (non-recoverable) auth failure.
+
+    Scans the ENTIRE recent-output buffer, not just the last 4 KB. The Claude TUI
+    redraws differentially: "Not logged in / Run /login" is painted once into the
+    status bar and then NOT re-emitted every frame, so on a narrow 4 KB tail it
+    flickers in and out as later redraw escapes accumulate. That flicker made
+    Path 0 in _check_idle_timeout reset its LOGIN_CONFIRM_DELAY timer on every
+    miss, so the persistence never accumulated and the loop never STOPPED — it
+    respawned forever on a bogus "clean handoff" (the handoff phrase is echoed in
+    the startup prompt and latches a false done-pattern before the auth failure is
+    confirmed). A dead-auth session stays small and idle, so the failure text
+    reliably survives in the full buffer; an actively-working session streams fast
+    enough to evict any stray match well within the 20 s window, so widening the
+    scan does not add false positives.
+    """
     buf = getattr(task, "_recent_output", None)
     if not buf:
         return False
-    tail = bytes(buf[-4096:]) if len(buf) > 4096 else bytes(buf)
-    return any(pat in tail for pat in _LOGIN_REQUIRED_PATTERNS)
+    return any(pat in buf for pat in _LOGIN_REQUIRED_PATTERNS)
 
 
 def _is_context_limit(task) -> bool:  # noqa: ANN001
