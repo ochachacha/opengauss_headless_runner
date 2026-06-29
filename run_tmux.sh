@@ -108,7 +108,11 @@ cmd_start() {
     # Source the env file inside the tmux session so the spawned shell
     # inherits the correct API keys (tmux starts a fresh shell).
     # Also forward HEADLESS_MODE since tmux doesn't inherit exports.
-    local tmux_cmd="export HEADLESS_MODE='$HEADLESS_MODE'; export HEADLESS_EXTRA_INSTRUCTION='${EXTRA_INSTRUCTION//\'/\'\\\'\'}'; "
+    # Prepend ~/.local/bin (uv/uvx live there) to PATH. tmux runs this command in a
+    # NON-login shell, so ~/.profile is not sourced; without this, a restart invoked
+    # over a non-interactive SSH session loses ~/.local/bin and fails with
+    # "Neither uvx nor uv is available".
+    local tmux_cmd="export PATH=\"\$HOME/.local/bin:\$PATH\"; export HEADLESS_MODE='$HEADLESS_MODE'; export HEADLESS_EXTRA_INSTRUCTION='${EXTRA_INSTRUCTION//\'/\'\\\'\'}'; "
     if [[ -f "$ENV_FILE" ]]; then
         tmux_cmd+="set -a; source '$ENV_FILE'; set +a; "
     fi
